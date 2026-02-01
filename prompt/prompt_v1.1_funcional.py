@@ -1,0 +1,6119 @@
+# prompt da versão funcional 1.1
+
+# preciso deixar a API funcionando perfeitamente, ela irá trazer as op do sistema e isso é fundamental
+# no final está o retorno atual da minha API, preciso deixar o banco de dados compativel e a aplicação
+# preciso que veja toda a aplicação e escreva completamente os arquivos que sofrerem alguma alteração.
+# Atualmente meu sistema está assim:
+
+# appy.py
+
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
+import qrcode
+from io import BytesIO
+import base64
+import requests
+import json
+from flask_migrate import Migrate
+import warnings
+from sqlalchemy.exc import SAWarning
+
+# Silenciar warnings do SQLAlchemy
+warnings.filterwarnings('ignore', category=SAWarning)
+
+# Carregar variáveis de ambiente
+load_dotenv()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///production_pointer.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+
+# ========== MODELOS DE BANCO DE DADOS ==========
+
+class Usuario(db.Model):
+    __tablename__ = 'usuarios'
+    id = db.Column(db.Integer, primary_key=True)
+    codigo_qr = db.Column(db.String(100), unique=True, nullable=False)
+    nome = db.Column(db.String(100), nullable=False)
+    tipo = db.Column(db.String(20), nullable=False, default='operador')
+    setor = db.Column(db.String(50))
+    ativo = db.Column(db.Boolean, default=True)
+    data_cadastro = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Maquina(db.Model):
+    __tablename__ = 'maquinas'
+    id = db.Column(db.Integer, primary_key=True)
+    codigo_qr = db.Column(db.String(100), unique=True, nullable=False)
+    codigo = db.Column(db.String(50), nullable=False)
+    nome = db.Column(db.String(100), nullable=False)
+    setor = db.Column(db.String(50), nullable=False)
+    tipo_maquina = db.Column(db.String(50))
+    status = db.Column(db.String(20), default='parada')
+    data_cadastro = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relacionamentos
+    op_atual = db.relationship('OrdemProducao', backref='maquina_atual_rel', lazy=True, 
+                               foreign_keys='OrdemProducao.maquina_atual')
+
+class OrdemProducao(db.Model):
+    __tablename__ = 'ordens_producao'
+    id = db.Column(db.Integer, primary_key=True)
+    op = db.Column(db.Integer, unique=True, nullable=False)
+    produto = db.Column(db.String(50), nullable=False)
+    narrativa = db.Column(db.Text, nullable=False)
+    grupo = db.Column(db.String(20))
+    qtde_programado = db.Column(db.Float, nullable=False)
+    qtde_carregado = db.Column(db.Float, nullable=False)
+    qtde_produzida = db.Column(db.Float, default=0)
+    unidade_medida = db.Column(db.String(5), default='M')
+    estagio_atual = db.Column(db.String(50))
+    estagio_posicao = db.Column(db.String(50))
+    status_op = db.Column(db.String(20), default='pendente')
+    maquina_atual = db.Column(db.Integer, db.ForeignKey('maquinas.id'))
+    data_importacao = db.Column(db.DateTime, default=datetime.utcnow)
+    data_inicio = db.Column(db.DateTime)
+    data_termino = db.Column(db.DateTime)
+    sincronizado_em = db.Column(db.DateTime)
+    observacao = db.Column(db.Text)
+    origem_api = db.Column(db.Boolean, default=False)
+    
+    # Relacionamentos corrigidos
+    apontamentos = db.relationship('Apontamento', backref='op_rel', lazy=True, overlaps="apontamentos_rel")
+
+class Apontamento(db.Model):
+    __tablename__ = 'apontamentos'
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    maquina_id = db.Column(db.Integer, db.ForeignKey('maquinas.id'), nullable=False)
+    op_id = db.Column(db.Integer, db.ForeignKey('ordens_producao.id'), nullable=False)
+    data_hora_inicio = db.Column(db.DateTime, default=datetime.utcnow)
+    data_hora_fim = db.Column(db.DateTime)
+    metros_processados = db.Column(db.Float, nullable=False)
+    observacao = db.Column(db.Text)
+    status_apontamento = db.Column(db.String(20), default='em_andamento')
+    tipo_apontamento = db.Column(db.String(20), default='producao')
+    
+    # Relacionamentos corrigidos
+    usuario = db.relationship('Usuario', backref='apontamentos')
+    maquina = db.relationship('Maquina', backref='apontamentos')
+    op = db.relationship('OrdemProducao', backref='apontamentos_rel', lazy=True, overlaps="apontamentos,op_rel")
+
+class MotivoParada(db.Model):
+    __tablename__ = 'motivos_parada'
+    id = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(20), unique=True, nullable=False)
+    descricao = db.Column(db.String(100), nullable=False)
+    categoria = db.Column(db.String(50), nullable=False)
+    cor = db.Column(db.String(20))
+    requer_justificativa = db.Column(db.Boolean, default=False)
+    ativo = db.Column(db.Boolean, default=True)
+    ordem_exibicao = db.Column(db.Integer, default=0)
+
+class ParadaMaquina(db.Model):
+    __tablename__ = 'paradas_maquina'
+    id = db.Column(db.Integer, primary_key=True)
+    apontamento_id = db.Column(db.Integer, db.ForeignKey('apontamentos.id'))
+    maquina_id = db.Column(db.Integer, db.ForeignKey('maquinas.id'), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
+    motivo_id = db.Column(db.Integer, db.ForeignKey('motivos_parada.id'))
+    motivo_personalizado = db.Column(db.String(100))
+    data_hora_inicio = db.Column(db.DateTime, default=datetime.utcnow)
+    data_hora_fim = db.Column(db.DateTime)
+    duracao_minutos = db.Column(db.Integer)
+    justificativa = db.Column(db.Text)
+    categoria = db.Column(db.String(50))
+
+class LogSincronizacao(db.Model):
+    __tablename__ = 'log_sincronizacao'
+    id = db.Column(db.Integer, primary_key=True)
+    tipo = db.Column(db.String(50), nullable=False)
+    data_execucao = db.Column(db.DateTime, default=datetime.utcnow)
+    registros_processados = db.Column(db.Integer, default=0)
+    registros_novos = db.Column(db.Integer, default=0)
+    registros_atualizados = db.Column(db.Integer, default=0)
+    duracao_segundos = db.Column(db.Float)
+    status = db.Column(db.String(20))
+    mensagem = db.Column(db.Text)
+    detalhes = db.Column(db.Text)
+
+
+# ========== CONTEXT PROCESSOR ==========
+@app.context_processor
+def inject_datetime():
+    """Injeta datetime e now em todos os templates"""
+    return dict(datetime=datetime, now=datetime.utcnow)
+
+
+# ========== CLIENTE API SYSTÊXTIL ==========
+
+class SystextilAPIClient:
+    def __init__(self):
+        self.base_url = os.getenv('SYSTEXTIL_API_BASE_URL', 'https://promoda.systextil.com.br/apexbd/erp')
+        self.token_url = os.getenv('SYSTEXTIL_TOKEN_URL', 'https://promoda.systextil.com.br/apexbd/erp/oauth/token')
+        self.client_id = os.getenv('SYSTEXTIL_CLIENT_ID', 'vM_z3JIQSR7fMml912X4Wg..')
+        self.client_secret = os.getenv('SYSTEXTIL_CLIENT_SECRET', 'v6CnE7I6vI6JkYn7DOIQ6A..')
+        self.access_token = None
+        self.token_expiry = None
+    
+    def _get_access_token(self):
+        """Obtém token OAuth2 usando client credentials"""
+        auth_string = f"{self.client_id}:{self.client_secret}"
+        auth_encoded = base64.b64encode(auth_string.encode()).decode()
+        
+        headers = {
+            'Authorization': f'Basic {auth_encoded}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        data = {
+            'grant_type': 'client_credentials'
+        }
+        
+        try:
+            response = requests.post(self.token_url, headers=headers, data=data, timeout=30)
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                self.access_token = token_data['access_token']
+                self.token_expiry = datetime.utcnow() + timedelta(seconds=token_data.get('expires_in', 3600))
+                return True
+            else:
+                raise Exception(f"Erro ao obter token: {response.status_code} - {response.text}")
+        except Exception as e:
+            raise Exception(f"Falha na comunicação com API de autenticação: {str(e)}")
+    
+    def _ensure_token_valid(self):
+        """Verifica se o token é válido e renova se necessário"""
+        if not self.access_token or not self.token_expiry or datetime.utcnow() >= self.token_expiry:
+            self._get_access_token()
+    
+    def get_production_orders(self, ultima_sincronizacao=None):
+        """Busca ordens de produção do endpoint api_pcp_ops"""
+        self._ensure_token_valid()
+        
+        endpoint = f"{self.base_url}/systextil-intg-plm/api_pcp_ops"
+        
+        headers = {
+            'Authorization': f'Bearer {self.access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        params = {}
+        if ultima_sincronizacao:
+            # Formatar data para a API (se necessário)
+            params['data_inicio'] = ultima_sincronizacao.strftime('%Y-%m-%d')
+        
+        try:
+            response = requests.get(endpoint, headers=headers, params=params, timeout=60)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Processa os dados conforme estrutura fornecida
+                processed_orders = []
+                for item in data.get('items', []):
+                    order = {
+                        'op': item['OP'],
+                        'produto': item['PRODUTO'],
+                        'narrativa': item['NARRATIVA'],
+                        'grupo': item['GRUPO'],
+                        'qtde_programado': item['QTDE_PROGRAMADO'],
+                        'qtde_carregado': item['QTDE_CARREGADO'],
+                        'qtde_produzida': item['QTDE_PRODUZIDA'],
+                        'estagio_atual': item['ESTAGIO'],
+                        'estagio_posicao': item['ESTAGIO_POSICAO'],
+                        'maquina_op': item.get('MAQUINA_OP', ''),
+                        'maquina_op_nome': item.get('MAQUINA_OP_NOME', ''),
+                        'deposito_final': item.get('DEPOSITO_FINAL', ''),
+                        'qualidade_tecido': item.get('QUALIDADE_TECIDO', ''),
+                        'metros_1_qualidade': item.get('QTDE_METROS_1_QUALIDADE', 0),
+                        'metros_2_qualidade': item.get('QTDE_METROS_2_QUALIDADE', 0),
+                        'calculado_quebra': item.get('CALCULO_QUEBRA', 0),
+                        'rolos_gerados': item.get('QTDE_ROLOS_GERADOS', 0),
+                        'pecas_vinculadas': item.get('PECAS_VINCULADAS', ''),
+                        'observacao': item.get('OBS', ''),
+                        'periodo': item.get('PERIODO', 0),
+                        'processo': item.get('PROCESSO', 0),
+                        'unidade_medida': item.get('UM', 'M'),
+                        'nivel': item.get('NIVEL', ''),
+                        'subgrupo': item.get('SUB', ''),
+                        'item': item.get('ITEM', '')
+                    }
+                    processed_orders.append(order)
+                
+                return processed_orders
+            else:
+                raise Exception(f"Erro API: {response.status_code} - {response.text}")
+                
+        except Exception as e:
+            raise Exception(f"Falha na comunicação com API de OPs: {str(e)}")
+    
+    def sync_orders_to_database(self):
+        """Sincroniza ordens da API para o banco local"""
+        start_time = datetime.utcnow()
+        
+        try:
+            # Buscar última sincronização bem-sucedida
+            last_sync = db.session.get(LogSincronizacao, 
+                LogSincronizacao.query.filter_by(
+                    tipo='ops', 
+                    status='sucesso'
+                ).order_by(LogSincronizacao.data_execucao.desc()).first()
+            )
+            
+            ultima_sincronizacao = last_sync.data_execucao if last_sync else None
+            
+            # Buscar ordens da API
+            orders = self.get_production_orders(ultima_sincronizacao)
+            
+            stats = {
+                'total': len(orders),
+                'novos': 0,
+                'atualizados': 0,
+                'erros': 0
+            }
+            
+            for order_data in orders:
+                try:
+                    # Verificar se OP já existe
+                    existing = OrdemProducao.query.filter_by(op=order_data['op']).first()
+                    
+                    if existing:
+                        # Atualiza apenas se não estiver finalizada
+                        if existing.status_op != 'finalizada':
+                            # Atualiza campos
+                            existing.qtde_produzida = order_data['qtde_produzida']
+                            existing.estagio_atual = order_data['estagio_atual']
+                            existing.estagio_posicao = order_data['estagio_posicao']
+                            existing.maquina_atual = self._get_maquina_id_by_code(order_data['maquina_op'])
+                            existing.sincronizado_em = datetime.utcnow()
+                            existing.observacao = order_data['observacao']
+                            stats['atualizados'] += 1
+                    else:
+                        # Cria nova OP
+                        nova_op = OrdemProducao(
+                            op=order_data['op'],
+                            produto=order_data['produto'],
+                            narrativa=order_data['narrativa'],
+                            grupo=order_data['grupo'],
+                            qtde_programado=order_data['qtde_programado'],
+                            qtde_carregado=order_data['qtde_carregado'],
+                            qtde_produzida=order_data['qtde_produzida'],
+                            estagio_atual=order_data['estagio_atual'],
+                            estagio_posicao=order_data['estagio_posicao'],
+                            maquina_atual=self._get_maquina_id_by_code(order_data['maquina_op']),
+                            status_op=self._determine_status(order_data['estagio_posicao']),
+                            origem_api=True,
+                            sincronizado_em=datetime.utcnow(),
+                            observacao=order_data['observacao'],
+                            unidade_medida=order_data['unidade_medida']
+                        )
+                        db.session.add(nova_op)
+                        stats['novos'] += 1
+                        
+                except Exception as e:
+                    stats['erros'] += 1
+                    print(f"Erro processando OP {order_data.get('op', 'N/A')}: {e}")
+            
+            db.session.commit()
+            
+            # Log da sincronização
+            duracao = (datetime.utcnow() - start_time).total_seconds()
+            
+            log = LogSincronizacao(
+                tipo='ops',
+                registros_processados=stats['total'],
+                registros_novos=stats['novos'],
+                registros_atualizados=stats['atualizados'],
+                duracao_segundos=duracao,
+                status='sucesso',
+                mensagem=f"Sincronização realizada com sucesso. {stats['novos']} novos, {stats['atualizados']} atualizados."
+            )
+            
+            db.session.add(log)
+            db.session.commit()
+            
+            return {
+                'success': True,
+                'stats': stats,
+                'message': f"Sincronização concluída: {stats['novos']} novas OPs, {stats['atualizados']} atualizadas"
+            }
+            
+        except Exception as e:
+            # Log do erro
+            duracao = (datetime.utcnow() - start_time).total_seconds()
+            
+            log = LogSincronizacao(
+                tipo='ops',
+                registros_processados=0,
+                duracao_segundos=duracao,
+                status='erro',
+                mensagem=str(e)
+            )
+            
+            db.session.add(log)
+            db.session.commit()
+            
+            return {
+                'success': False,
+                'message': f"Erro na sincronização: {str(e)}"
+            }
+    
+    def _get_maquina_id_by_code(self, codigo_maquina):
+        """Busca ID da máquina pelo código"""
+        if not codigo_maquina:
+            return None
+        
+        maquina = Maquina.query.filter_by(codigo=codigo_maquina).first()
+        if maquina:
+            return maquina.id
+        
+        return None
+    
+    def _determine_status(self, estagio_posicao):
+        """Determina status da OP baseado no estágio"""
+        if estagio_posicao == '99-Finalizado':
+            return 'finalizada'
+        elif estagio_posicao and estagio_posicao != '99-Finalizado':
+            return 'em_andamento'
+        return 'pendente'
+
+# ========== FUNÇÕES AUXILIARES ==========
+
+def generate_qr_code(text):
+    """Gera QR Code e retorna como base64"""
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(text)
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    buffered = BytesIO()
+    img.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    
+    return f"data:image/png;base64,{img_str}"
+
+def init_database():
+    """Inicializa o banco de dados com dados de exemplo"""
+    with app.app_context():
+        db.create_all()
+        
+        # Verificar se já existem dados
+        if Usuario.query.count() == 0:
+            # Criar usuários de exemplo
+            usuarios = [
+                Usuario(codigo_qr='OPERADOR001', nome='João Silva', tipo='operador', setor='tingimento'),
+                Usuario(codigo_qr='OPERADOR002', nome='Maria Santos', tipo='operador', setor='preparacao'),
+                Usuario(codigo_qr='SUPERVISOR001', nome='Carlos Oliveira', tipo='supervisor', setor='produção'),
+                Usuario(codigo_qr='ADMIN001', nome='Admin Sistema', tipo='admin'),
+            ]
+            
+            for usuario in usuarios:
+                db.session.add(usuario)
+            
+            # Criar máquinas de exemplo
+            maquinas = [
+                Maquina(codigo_qr='JIGGER01', codigo='TING.001.00001', nome='Jigger 1', setor='tingimento', tipo_maquina='jigger'),
+                Maquina(codigo_qr='JIGGER02', codigo='TING.001.00002', nome='Jigger 2', setor='tingimento', tipo_maquina='jigger'),
+                Maquina(codigo_qr='TURBO01', codigo='TING.002.00001', nome='Turbo 1', setor='tingimento', tipo_maquina='turbo'),
+                Maquina(codigo_qr='STORK01', codigo='EST.001.00001', nome='Stork 1', setor='estampagem', tipo_maquina='stork'),
+            ]
+            
+            for maquina in maquinas:
+                db.session.add(maquina)
+            
+            # Criar ordens de produção de exemplo
+            ops = [
+                OrdemProducao(
+                    op=193,
+                    produto='2.K1820.TIN.000051',
+                    narrativa='TECIDO LENÇOL ELEGANCE 150FIOS TINTO AZUL',
+                    grupo='K1820',
+                    qtde_programado=3200,
+                    qtde_carregado=3000,
+                    qtde_produzida=1500,
+                    estagio_atual='ACABAMENTO RAMA',
+                    estagio_posicao='45',
+                    status_op='em_andamento'
+                ),
+                OrdemProducao(
+                    op=222,
+                    produto='2.K1820.TIN.000052',
+                    narrativa='TECIDO LENÇOL ELEGANCE 150FIOS BRANCO',
+                    grupo='K1820',
+                    qtde_programado=2800,
+                    qtde_carregado=2500,
+                    qtde_produzida=0,
+                    estagio_atual='PREPARAÇÃO',
+                    estagio_posicao='10',
+                    status_op='pendente'
+                ),
+                OrdemProducao(
+                    op=245,
+                    produto='2.K1825.TIN.000067',
+                    narrativa='TECIDO LENÇOL PREMIUM 200FIOS CINZA',
+                    grupo='K1825',
+                    qtde_programado=4000,
+                    qtde_carregado=3800,
+                    qtde_produzida=3800,
+                    estagio_atual='FINALIZADO',
+                    estagio_posicao='99',
+                    status_op='finalizada'
+                ),
+            ]
+            
+            for op in ops:
+                db.session.add(op)
+            
+            # Criar motivos de parada
+            motivos = [
+                MotivoParada(codigo='ENE001', descricao='Falta de energia', categoria='tecnica', cor='vermelho'),
+                MotivoParada(codigo='GAS001', descricao='Falta de gás', categoria='tecnica', cor='vermelho'),
+                MotivoParada(codigo='MAN001', descricao='Manutenção corretiva', categoria='tecnica', cor='laranja'),
+                MotivoParada(codigo='MAN002', descricao='Manutenção preventiva', categoria='planejada', cor='amarelo'),
+                MotivoParada(codigo='QUAL001', descricao='Aguardando qualidade', categoria='organizacional', cor='azul'),
+                MotivoParada(codigo='MAT001', descricao='Falta de matéria-prima', categoria='logistica', cor='roxo'),
+                MotivoParada(codigo='OPE001', descricao='Falta de operador', categoria='organizacional', cor='cinza'),
+                MotivoParada(codigo='OUT001', descricao='Outros', categoria='diversos', cor='cinza', requer_justificativa=True),
+            ]
+            
+            for motivo in motivos:
+                db.session.add(motivo)
+            
+            db.session.commit()
+            print("Banco de dados inicializado com dados de exemplo!")
+
+# ========== ROTAS PRINCIPAIS ==========
+
+@app.route('/')
+def index():
+    """Página inicial"""
+    return render_template('index.html')
+
+@app.route('/scanner')
+def scanner():
+    """Tela de scanner de QR Code"""
+    return render_template('scanner.html')
+
+@app.route('/scanner_maquina')
+def scanner_maquina():
+    """Scanner para máquina"""
+    if 'usuario_id' not in session:
+        return redirect('/')
+    return render_template('scanner_maquina.html')
+
+@app.route('/selecionar_op')
+def selecionar_op():
+    """Seleção de OP para a máquina"""
+    if 'maquina_id' not in session:
+        return redirect('/')
+    
+    maquina = db.session.get(Maquina, session['maquina_id'])
+    ops = OrdemProducao.query.filter(
+        OrdemProducao.status_op.in_(['pendente', 'pausado']),
+        OrdemProducao.qtde_produzida < OrdemProducao.qtde_carregado
+    ).order_by(OrdemProducao.op).all()
+    
+    return render_template('selecionar_op.html', ops=ops, maquina=maquina)
+
+@app.route('/production')
+def production():
+    """Tela de apontamento de produção"""
+    if 'usuario_id' not in session or 'maquina_id' not in session or 'op_id' not in session:
+        return redirect('/')
+    
+    usuario = db.session.get(Usuario, session['usuario_id'])
+    maquina = db.session.get(Maquina, session['maquina_id'])
+    op = db.session.get(OrdemProducao, session['op_id'])
+    
+    if not usuario or not maquina or not op:
+        return redirect('/')
+    
+    metros_disponiveis = op.qtde_carregado - op.qtde_produzida
+    
+    return render_template('production.html',
+                         usuario=usuario,
+                         maquina=maquina,
+                         op=op,
+                         metros_disponiveis=metros_disponiveis)
+
+# ========== API ROUTES ==========
+
+@app.route('/api/validate_qr', methods=['POST'])
+def validate_qr():
+    """Valida QR Code escaneado"""
+    data = request.json
+    qr_code = data.get('qr_code', '').strip()
+    
+    # Verificar se é usuário
+    usuario = Usuario.query.filter_by(codigo_qr=qr_code, ativo=True).first()
+    if usuario:
+        session['usuario_id'] = usuario.id
+        session['usuario_nome'] = usuario.nome
+        session['usuario_tipo'] = usuario.tipo
+        
+        if usuario.tipo == 'operador':
+            return jsonify({
+                'success': True,
+                'redirect': '/scanner_maquina',
+                'usuario': {
+                    'id': usuario.id,
+                    'nome': usuario.nome,
+                    'tipo': usuario.tipo
+                }
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'redirect': '/admin/dashboard',
+                'usuario': {
+                    'id': usuario.id,
+                    'nome': usuario.nome,
+                    'tipo': usuario.tipo
+                }
+            })
+    
+    # Verificar se é máquina
+    maquina = Maquina.query.filter_by(codigo_qr=qr_code).first()
+    if maquina:
+        session['maquina_id'] = maquina.id
+        session['maquina_nome'] = maquina.nome
+        
+        op_ativa = OrdemProducao.query.filter_by(
+            maquina_atual=maquina.id,
+            status_op='em_andamento'
+        ).first()
+        
+        if op_ativa:
+            session['op_id'] = op_ativa.id
+            return jsonify({
+                'success': True,
+                'redirect': '/production',
+                'maquina': {
+                    'id': maquina.id,
+                    'nome': maquina.nome,
+                    'status': maquina.status
+                },
+                'op_ativa': {
+                    'id': op_ativa.id,
+                    'op': op_ativa.op,
+                    'produto': op_ativa.produto
+                }
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'redirect': '/selecionar_op',
+                'maquina': {
+                    'id': maquina.id,
+                    'nome': maquina.nome,
+                    'status': maquina.status
+                }
+            })
+    
+    return jsonify({'success': False, 'message': 'QR Code não reconhecido'})
+
+@app.route('/api/selecionar_op/<int:op_id>', methods=['POST'])
+def selecionar_op_api(op_id):
+    """Seleciona OP para produção"""
+    if 'maquina_id' not in session:
+        return jsonify({'success': False, 'message': 'Sessão inválida'})
+    
+    op = db.session.get(OrdemProducao, op_id)
+    if not op:
+        return jsonify({'success': False, 'message': 'OP não encontrada'})
+    
+    op.maquina_atual = session['maquina_id']
+    op.status_op = 'em_andamento'
+    if not op.data_inicio:
+        op.data_inicio = datetime.utcnow()
+    
+    maquina = db.session.get(Maquina, session['maquina_id'])
+    maquina.status = 'trabalhando'
+    
+    session['op_id'] = op.id
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'redirect': '/production',
+        'op': {
+            'id': op.id,
+            'numero': op.op,
+            'produto': op.produto
+        }
+    })
+
+@app.route('/api/registrar_apontamento', methods=['POST'])
+def registrar_apontamento():
+    """Registra apontamento de produção"""
+    data = request.json
+    
+    if 'usuario_id' not in session or 'maquina_id' not in session or 'op_id' not in session:
+        return jsonify({'success': False, 'message': 'Sessão inválida'})
+    
+    try:
+        apontamento = Apontamento(
+            usuario_id=session['usuario_id'],
+            maquina_id=session['maquina_id'],
+            op_id=session['op_id'],
+            metros_processados=float(data['metros_processados']),
+            observacao=data.get('observacao', ''),
+            data_hora_fim=datetime.utcnow(),
+            status_apontamento='finalizado'
+        )
+        
+        db.session.add(apontamento)
+        
+        op = db.session.get(OrdemProducao, session['op_id'])
+        op.qtde_produzida += float(data['metros_processados'])
+        
+        if op.qtde_produzida >= op.qtde_carregado:
+            op.status_op = 'finalizada'
+            op.data_termino = datetime.utcnow()
+            
+            maquina = db.session.get(Maquina, session['maquina_id'])
+            maquina.status = 'parada'
+            
+            session.pop('maquina_id', None)
+            session.pop('op_id', None)
+            redirect_url = '/scanner_maquina'
+        else:
+            redirect_url = '/production?continue=true'
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Produção registrada com sucesso!',
+            'redirect': redirect_url
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/get_motivos_parada')
+def get_motivos_parada():
+    """Retorna lista de motivos de parada"""
+    motivos = MotivoParada.query.filter_by(ativo=True).order_by(MotivoParada.ordem_exibicao).all()
+    
+    motivos_list = []
+    for motivo in motivos:
+        motivos_list.append({
+            'id': motivo.id,
+            'codigo': motivo.codigo,
+            'descricao': motivo.descricao,
+            'categoria': motivo.categoria,
+            'cor': motivo.cor
+        })
+    
+    return jsonify(motivos_list)
+
+@app.route('/api/registrar_parada', methods=['POST'])
+def registrar_parada():
+    """Registra parada de máquina"""
+    data = request.json
+    
+    if 'usuario_id' not in session or 'maquina_id' not in session:
+        return jsonify({'success': False, 'message': 'Sessão inválida'})
+    
+    try:
+        parada = ParadaMaquina(
+            maquina_id=session['maquina_id'],
+            usuario_id=session['usuario_id'],
+            motivo_id=data.get('motivo_id'),
+            motivo_personalizado=data.get('motivo_personalizado', ''),
+            justificativa=data.get('justificativa', ''),
+            categoria=data.get('categoria', 'nao_planejada'),
+            data_hora_inicio=datetime.utcnow()
+        )
+        
+        db.session.add(parada)
+        
+        maquina = db.session.get(Maquina, session['maquina_id'])
+        maquina.status = 'parada'
+        
+        if 'op_id' in session:
+            op = db.session.get(OrdemProducao, session['op_id'])
+            if op and op.status_op == 'em_andamento':
+                op.status_op = 'pausado'
+        
+        db.session.commit()
+        
+        session.pop('maquina_id', None)
+        session.pop('op_id', None)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Parada registrada com sucesso!',
+            'redirect': '/'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+# ========== ADMIN ROUTES ==========
+
+@app.route('/admin')
+def admin_redirect():
+    """Redireciona para o dashboard admin"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    return redirect('/admin/dashboard')
+
+@app.route('/admin/dashboard')
+def admin_dashboard():
+    """Dashboard administrativo"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    # Estatísticas
+    total_ops = OrdemProducao.query.count()
+    ops_andamento = OrdemProducao.query.filter_by(status_op='em_andamento').count()
+    ops_finalizadas = OrdemProducao.query.filter_by(status_op='finalizada').count()
+    maquinas_ativas = Maquina.query.filter_by(status='trabalhando').count()
+    total_maquinas = Maquina.query.count()
+    
+    # Últimos apontamentos
+    ultimos_apontamentos = Apontamento.query.order_by(Apontamento.data_hora_inicio.desc()).limit(10).all()
+    
+    # Status das máquinas
+    maquinas = Maquina.query.order_by(Maquina.setor, Maquina.nome).all()
+    
+    # Produção do dia
+    hoje = datetime.utcnow().date()
+    producao_hoje = db.session.query(
+        db.func.sum(Apontamento.metros_processados)
+    ).filter(
+        db.func.date(Apontamento.data_hora_inicio) == hoje
+    ).scalar() or 0
+    
+    # Contar usuários para o dashboard
+    usuarios_com_qr = []
+    usuarios = Usuario.query.all()
+    for usuario in usuarios:
+        qr_data = generate_qr_code(usuario.codigo_qr)
+        usuarios_com_qr.append({
+            'usuario': usuario,
+            'qr_code': qr_data
+        })
+    
+    return render_template('admin_dashboard.html',
+                         total_ops=total_ops,
+                         ops_andamento=ops_andamento,
+                         ops_finalizadas=ops_finalizadas,
+                         maquinas_ativas=maquinas_ativas,
+                         total_maquinas=total_maquinas,
+                         producao_hoje=producao_hoje,
+                         ultimos_apontamentos=ultimos_apontamentos,
+                         maquinas=maquinas,
+                         usuarios_com_qr=usuarios_com_qr)
+
+@app.route('/admin/setup')
+def admin_setup():
+    """Página de setup inicial"""
+    return render_template('admin_setup.html')
+
+@app.route('/admin/ops')
+def admin_ops_page():
+    """Página de gerenciamento de OPs"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    ops = OrdemProducao.query.order_by(OrdemProducao.op.desc()).all()
+    maquinas = Maquina.query.all()
+    
+    return render_template('admin_ops.html', ops=ops, maquinas=maquinas)
+
+@app.route('/admin/maquinas')
+def admin_maquinas_page():
+    """Página de gerenciamento de máquinas"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    maquinas = Maquina.query.order_by(Maquina.setor, Maquina.nome).all()
+    
+    maquinas_com_qr = []
+    for maquina in maquinas:
+        qr_data = generate_qr_code(maquina.codigo_qr)
+        maquinas_com_qr.append({
+            'maquina': maquina,
+            'qr_code': qr_data
+        })
+    
+    return render_template('admin_maquinas.html', maquinas_com_qr=maquinas_com_qr)
+
+@app.route('/admin/usuarios')
+def admin_usuarios_page():
+    """Página de gerenciamento de usuários"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    usuarios = Usuario.query.order_by(Usuario.nome).all()
+    
+    usuarios_com_qr = []
+    for usuario in usuarios:
+        qr_data = generate_qr_code(usuario.codigo_qr)
+        usuarios_com_qr.append({
+            'usuario': usuario,
+            'qr_code': qr_data
+        })
+    
+    return render_template('admin_usuarios.html', usuarios_com_qr=usuarios_com_qr)
+
+@app.route('/admin/motivos_parada')
+def admin_motivos_parada_page():
+    """Página de gerenciamento de motivos de parada"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    motivos = MotivoParada.query.order_by(MotivoParada.categoria, MotivoParada.ordem_exibicao).all()
+    
+    return render_template('admin_motivos_parada.html', motivos=motivos)
+
+@app.route('/admin/api_sync')
+def admin_api_sync():
+    """Página de sincronização com API"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    # Últimas sincronizações
+    logs = LogSincronizacao.query.order_by(LogSincronizacao.data_execucao.desc()).limit(10).all()
+    
+    # Estatísticas de sincronização
+    total_sync = LogSincronizacao.query.filter_by(tipo='ops').count()
+    sync_success = LogSincronizacao.query.filter_by(tipo='ops', status='sucesso').count()
+    sync_error = LogSincronizacao.query.filter_by(tipo='ops', status='erro').count()
+    
+    # Última sincronização bem-sucedida
+    last_success = LogSincronizacao.query.filter_by(
+        tipo='ops', 
+        status='sucesso'
+    ).order_by(LogSincronizacao.data_execucao.desc()).first()
+    
+    # Configurações da API
+    api_config = {
+        'base_url': os.getenv('SYSTEXTIL_API_BASE_URL', 'Não configurado'),
+        'client_id': os.getenv('SYSTEXTIL_CLIENT_ID', 'Não configurado')[:10] + '...' if os.getenv('SYSTEXTIL_CLIENT_ID') else 'Não configurado'
+    }
+    
+    return render_template('admin_api_sync.html',
+                         logs=logs,
+                         total_sync=total_sync,
+                         sync_success=sync_success,
+                         sync_error=sync_error,
+                         last_success=last_success,
+                         api_config=api_config)
+
+# ========== API PARA ADMIN ==========
+
+@app.route('/api/admin/add_op', methods=['POST'])
+def admin_add_op():
+    """Adiciona nova OP manualmente"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        data = request.json
+        
+        nova_op = OrdemProducao(
+            op=int(data['op']),
+            produto=data['produto'],
+            narrativa=data['narrativa'],
+            grupo=data.get('grupo', ''),
+            qtde_programado=float(data['qtde_programado']),
+            qtde_carregado=float(data['qtde_carregado']),
+            qtde_produzida=float(data.get('qtde_produzida', 0)),
+            estagio_atual=data.get('estagio_atual', ''),
+            estagio_posicao=data.get('estagio_posicao', ''),
+            status_op=data.get('status_op', 'pendente'),
+            unidade_medida=data.get('unidade_medida', 'M'),
+            observacao=data.get('observacao', ''),
+            origem_api=False
+        )
+        
+        db.session.add(nova_op)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP adicionada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/update_op/<int:op_id>', methods=['PUT'])
+def update_op(op_id):
+    """Atualiza uma OP existente"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        data = request.json
+        
+        op = db.session.get(OrdemProducao, op_id)
+        if not op:
+            return jsonify({'success': False, 'message': 'OP não encontrada'})
+        
+        # Verificar se número da OP foi alterado
+        if 'op' in data and data['op'] != op.op:
+            # Verificar se nova OP já existe
+            existing = OrdemProducao.query.filter_by(op=data['op']).first()
+            if existing and existing.id != op_id:
+                return jsonify({'success': False, 'message': 'Já existe uma OP com este número'})
+        
+        # Atualizar campos
+        if 'op' in data:
+            op.op = data['op']
+        if 'produto' in data:
+            op.produto = data['produto']
+        if 'narrativa' in data:
+            op.narrativa = data['narrativa']
+        if 'grupo' in data:
+            op.grupo = data['grupo']
+        if 'qtde_programado' in data:
+            op.qtde_programado = data['qtde_programado']
+        if 'qtde_carregado' in data:
+            op.qtde_carregado = data['qtde_carregado']
+        if 'qtde_produzida' in data:
+            op.qtde_produzida = data['qtde_produzida']
+        if 'unidade_medida' in data:
+            op.unidade_medida = data['unidade_medida']
+        if 'estagio_atual' in data:
+            op.estagio_atual = data['estagio_atual']
+        if 'estagio_posicao' in data:
+            op.estagio_posicao = data['estagio_posicao']
+        if 'status_op' in data:
+            op.status_op = data['status_op']
+        if 'maquina_atual' in data:
+            op.maquina_atual = data['maquina_atual']
+        if 'observacao' in data:
+            op.observacao = data['observacao']
+        
+        # Atualizar datas conforme status
+        if 'status_op' in data:
+            if data['status_op'] == 'em_andamento' and not op.data_inicio:
+                op.data_inicio = datetime.utcnow()
+            elif data['status_op'] == 'finalizada' and not op.data_termino:
+                op.data_termino = datetime.utcnow()
+        
+        op.sincronizado_em = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP atualizada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/get_op/<int:op_id>')
+def get_op(op_id):
+    """Retorna dados de uma OP específica para edição"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    op = db.session.get(OrdemProducao, op_id)
+    if not op:
+        return jsonify({'success': False, 'message': 'OP não encontrada'})
+    
+    return jsonify({
+        'success': True,
+        'op': {
+            'id': op.id,
+            'op': op.op,
+            'produto': op.produto,
+            'narrativa': op.narrativa,
+            'grupo': op.grupo,
+            'qtde_programado': op.qtde_programado,
+            'qtde_carregado': op.qtde_carregado,
+            'qtde_produzida': op.qtde_produzida,
+            'unidade_medida': op.unidade_medida,
+            'estagio_atual': op.estagio_atual,
+            'estagio_posicao': op.estagio_posicao,
+            'status_op': op.status_op,
+            'maquina_atual': op.maquina_atual,
+            'observacao': op.observacao,
+            'data_inicio': op.data_inicio.isoformat() if op.data_inicio else None,
+            'data_termino': op.data_termino.isoformat() if op.data_termino else None,
+            'data_importacao': op.data_importacao.isoformat() if op.data_importacao else None
+        }
+    })
+
+@app.route('/api/admin/get_op_details/<int:op_id>')
+def get_op_details(op_id):
+    """Retorna detalhes completos de uma OP para visualização"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    op = db.session.get(OrdemProducao, op_id)
+    if not op:
+        return jsonify({'success': False, 'message': 'OP não encontrada'})
+    
+    maquina_nome = None
+    if op.maquina_atual:
+        maquina = db.session.get(Maquina, op.maquina_atual)
+        if maquina:
+            maquina_nome = maquina.nome
+    
+    return jsonify({
+        'success': True,
+        'op': {
+            'id': op.id,
+            'op': op.op,
+            'produto': op.produto,
+            'narrativa': op.narrativa,
+            'grupo': op.grupo,
+            'qtde_programado': float(op.qtde_programado),
+            'qtde_carregado': float(op.qtde_carregado),
+            'qtde_produzida': float(op.qtde_produzida),
+            'unidade_medida': op.unidade_medida,
+            'estagio_atual': op.estagio_atual,
+            'estagio_posicao': op.estagio_posicao,
+            'status_op': op.status_op,
+            'maquina_atual': op.maquina_atual,
+            'maquina_atual_nome': maquina_nome,
+            'data_inicio': op.data_inicio.isoformat() if op.data_inicio else None,
+            'data_termino': op.data_termino.isoformat() if op.data_termino else None,
+            'data_importacao': op.data_importacao.isoformat() if op.data_importacao else None,
+            'sincronizado_em': op.sincronizado_em.isoformat() if op.sincronizado_em else None,
+            'observacao': op.observacao
+        }
+    })
+
+@app.route('/api/admin/start_op/<int:op_id>', methods=['POST'])
+def start_op(op_id):
+    """Inicia produção de uma OP"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        op = db.session.get(OrdemProducao, op_id)
+        if not op:
+            return jsonify({'success': False, 'message': 'OP não encontrada'})
+        
+        op.status_op = 'em_andamento'
+        if not op.data_inicio:
+            op.data_inicio = datetime.utcnow()
+        
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP iniciada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/pause_op/<int:op_id>', methods=['POST'])
+def pause_op(op_id):
+    """Pausa produção de uma OP"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        op = db.session.get(OrdemProducao, op_id)
+        if not op:
+            return jsonify({'success': False, 'message': 'OP não encontrada'})
+        
+        op.status_op = 'pausado'
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP pausada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/resume_op/<int:op_id>', methods=['POST'])
+def resume_op(op_id):
+    """Retoma produção de uma OP"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        op = db.session.get(OrdemProducao, op_id)
+        if not op:
+            return jsonify({'success': False, 'message': 'OP não encontrada'})
+        
+        op.status_op = 'em_andamento'
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP retomada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/delete_op/<int:op_id>', methods=['DELETE'])
+def delete_op(op_id):
+    """Exclui uma OP"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        op = db.session.get(OrdemProducao, op_id)
+        if not op:
+            return jsonify({'success': False, 'message': 'OP não encontrada'})
+        
+        # Verificar se há apontamentos associados
+        apontamentos = Apontamento.query.filter_by(op_id=op_id).count()
+        if apontamentos > 0:
+            return jsonify({
+                'success': False, 
+                'message': f'Não é possível excluir esta OP. Existem {apontamentos} apontamentos associados.'
+            })
+        
+        db.session.delete(op)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'OP excluída com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/all_ops')
+def get_all_ops():
+    """Retorna todas as OPs para impressão"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    ops = OrdemProducao.query.order_by(OrdemProducao.op).all()
+    
+    ops_list = []
+    for op in ops:
+        ops_list.append({
+            'op': op.op,
+            'produto': op.produto,
+            'qtde_carregado': float(op.qtde_carregado),
+            'qtde_produzida': float(op.qtde_produzida),
+            'unidade_medida': op.unidade_medida,
+            'status_op': op.status_op
+        })
+    
+    return jsonify(ops_list)
+
+@app.route('/api/admin/add_maquina', methods=['POST'])
+def admin_add_maquina():
+    """Adiciona nova máquina"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        data = request.json
+        
+        nova_maquina = Maquina(
+            codigo_qr=data['codigo_qr'],
+            codigo=data['codigo'],
+            nome=data['nome'],
+            setor=data['setor'],
+            tipo_maquina=data.get('tipo_maquina', ''),
+            status=data.get('status', 'parada')
+        )
+        
+        db.session.add(nova_maquina)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Máquina adicionada com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/add_usuario', methods=['POST'])
+def admin_add_usuario():
+    """Adiciona novo usuário"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        data = request.json
+        
+        novo_usuario = Usuario(
+            codigo_qr=data['codigo_qr'],
+            nome=data['nome'],
+            tipo=data['tipo'],
+            setor=data.get('setor', ''),
+            ativo=data.get('ativo', True)
+        )
+        
+        db.session.add(novo_usuario)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Usuário adicionado com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/admin/add_motivo', methods=['POST'])
+def admin_add_motivo():
+    """Adiciona novo motivo de parada"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        data = request.json
+        
+        novo_motivo = MotivoParada(
+            codigo=data['codigo'],
+            descricao=data['descricao'],
+            categoria=data['categoria'],
+            cor=data['cor'],
+            ordem_exibicao=data.get('ordem_exibicao', 0),
+            requer_justificativa=data.get('requer_justificativa', False),
+            ativo=data.get('ativo', True)
+        )
+        
+        db.session.add(novo_motivo)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Motivo adicionado com sucesso!'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+
+@app.route('/api/generate_qr')
+def generate_qr():
+    """Gera QR Code para visualização"""
+    text = request.args.get('text', '')
+    if not text:
+        return jsonify({'error': 'Texto necessário'}), 400
+    
+    qr_code = generate_qr_code(text)
+    return jsonify({'qr_code': qr_code})
+
+@app.route('/api/generate_op_qr/<int:op_number>')
+def generate_op_qr(op_number):
+    """Gera QR Code para uma OP específica"""
+    qr_code = generate_qr_code(f"OP{op_number}")
+    # Converter base64 para imagem
+    import base64
+    qr_data = qr_code.split(',')[1]
+    qr_bytes = base64.b64decode(qr_data)
+    
+    from flask import make_response
+    response = make_response(qr_bytes)
+    response.headers.set('Content-Type', 'image/png')
+    response.headers.set('Content-Disposition', 'inline', filename=f'op_{op_number}_qr.png')
+    return response
+
+# ========== API SYNC ROUTES ==========
+
+@app.route('/api/sync/ops', methods=['POST'])
+def sync_ops():
+    """Sincroniza OPs com API externa"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        client = SystextilAPIClient()
+        result = client.sync_orders_to_database()
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Erro na sincronização: {str(e)}'
+        })
+
+@app.route('/api/sync/test_connection', methods=['GET'])
+def test_api_connection():
+    """Testa conexão com API externa"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    try:
+        client = SystextilAPIClient()
+        client._get_access_token()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Conexão com API estabelecida com sucesso!',
+            'token_expiry': client.token_expiry.isoformat() if client.token_expiry else None
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Falha na conexão com API: {str(e)}'
+        })
+
+@app.route('/api/sync/logs')
+def get_sync_logs():
+    """Retorna logs de sincronização"""
+    if session.get('usuario_tipo') != 'admin':
+        return jsonify({'success': False, 'message': 'Não autorizado'})
+    
+    logs = LogSincronizacao.query.order_by(LogSincronizacao.data_execucao.desc()).limit(50).all()
+    
+    logs_list = []
+    for log in logs:
+        logs_list.append({
+            'id': log.id,
+            'tipo': log.tipo,
+            'data_execucao': log.data_execucao.isoformat() if log.data_execucao else None,
+            'registros_processados': log.registros_processados,
+            'registros_novos': log.registros_novos,
+            'registros_atualizados': log.registros_atualizados,
+            'duracao_segundos': log.duracao_segundos,
+            'status': log.status,
+            'mensagem': log.mensagem
+        })
+    
+    return jsonify(logs_list)
+
+@app.route('/admin/op/<int:op_id>/print')
+def print_op(op_id):
+    """Página para impressão de uma OP específica"""
+    if session.get('usuario_tipo') != 'admin':
+        return redirect('/')
+    
+    op = db.session.get(OrdemProducao, op_id)
+    if not op:
+        return "OP não encontrada", 404
+    
+    # Gerar QR Code
+    qr_code = generate_qr_code(f"OP{op.op}")
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>OP {op.op} - Impressão</title>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                padding: 20px;
+                max-width: 800px;
+                margin: 0 auto;
+            }}
+            .print-header {{
+                text-align: center;
+                margin-bottom: 30px;
+                border-bottom: 2px solid #333;
+                padding-bottom: 20px;
+            }}
+            .company-info {{
+                margin-bottom: 20px;
+            }}
+            .op-info {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                margin-bottom: 30px;
+            }}
+            .info-box {{
+                border: 1px solid #ddd;
+                padding: 15px;
+                border-radius: 5px;
+            }}
+            .qr-container {{
+                text-align: center;
+                margin: 20px 0;
+            }}
+            .status-badge {{
+                display: inline-block;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-weight: bold;
+                margin-top: 10px;
+            }}
+            .status-pendente {{ background: #fff3cd; color: #856404; }}
+            .status-em_andamento {{ background: #d1ecf1; color: #0c5460; }}
+            .status-finalizada {{ background: #d4edda; color: #155724; }}
+            .status-pausado {{ background: #f8d7da; color: #721c24; }}
+            
+            @media print {{
+                body {{ padding: 0; }}
+                .no-print {{ display: none; }}
+                .print-header {{ border-bottom: 2px solid #000; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="print-header">
+            <div class="company-info">
+                <h1>LEAN PRODUCTION SYSTEM</h1>
+                <h2>ORDEM DE PRODUÇÃO</h2>
+            </div>
+            
+            <div class="qr-container">
+                <img src="{qr_code}" alt="QR Code OP {op.op}" width="150">
+                <h3>OP {op.op}</h3>
+            </div>
+            
+            <div class="status-badge status-{op.status_op}">
+                {op.status_op.upper()}
+            </div>
+        </div>
+        
+        <div class="op-info">
+            <div class="info-box">
+                <h4>Informações da OP</h4>
+                <p><strong>Produto:</strong> {op.produto}</p>
+                <p><strong>Descrição:</strong> {op.narrativa}</p>
+                <p><strong>Grupo:</strong> {op.grupo or 'N/A'}</p>
+                <p><strong>Unidade:</strong> {op.unidade_medida}</p>
+            </div>
+            
+            <div class="info-box">
+                <h4>Quantidades</h4>
+                <p><strong>Programado:</strong> {op.qtde_programado} {op.unidade_medida}</p>
+                <p><strong>Carregado:</strong> {op.qtde_carregado} {op.unidade_medida}</p>
+                <p><strong>Produzido:</strong> {op.qtde_produzida} {op.unidade_medida}</p>
+                <p><strong>Disponível:</strong> {op.qtde_carregado - op.qtde_produzida} {op.unidade_medida}</p>
+            </div>
+        </div>
+        
+        <div class="op-info">
+            <div class="info-box">
+                <h4>Status e Localização</h4>
+                <p><strong>Estágio Atual:</strong> {op.estagio_atual or 'N/A'}</p>
+                <p><strong>Posição:</strong> {op.estagio_posicao or 'N/A'}</p>
+                <p><strong>Data Início:</strong> {op.data_inicio.strftime('%d/%m/%Y') if op.data_inicio else 'N/A'}</p>
+                <p><strong>Data Término:</strong> {op.data_termino.strftime('%d/%m/%Y') if op.data_termino else 'N/A'}</p>
+            </div>
+            
+            <div class="info-box">
+                <h4>Informações Técnicas</h4>
+                <p><strong>Código QR:</strong> OP{op.op}</p>
+                <p><strong>ID no Sistema:</strong> {op.id}</p>
+                <p><strong>Data de Criação:</strong> {op.data_importacao.strftime('%d/%m/%Y') if op.data_importacao else 'N/A'}</p>
+                <p><strong>Última Atualização:</strong> {datetime.utcnow().strftime('%d/%m/%Y %H:%M')}</p>
+            </div>
+        </div>
+        
+        <div class="no-print" style="margin-top: 40px; text-align: center;">
+            <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px;">
+                🖨️ Imprimir
+            </button>
+            <button onclick="window.close()" style="padding: 10px 20px; font-size: 16px; margin-left: 10px;">
+                ❌ Fechar
+            </button>
+        </div>
+        
+        <script>
+            window.onload = function() {{
+                // Auto-print em alguns casos
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('auto') === 'true') {{
+                    window.print();
+                    setTimeout(function() {{
+                        window.close();
+                    }}, 1000);
+                }}
+            }};
+        </script>
+    </body>
+    </html>
+    """
+
+# ========== INICIALIZAÇÃO ==========
+
+if __name__ == '__main__':
+    init_database()
+    app.run(debug=True, host='0.0.0.0', port=5000)
+
+
+# requirements.txt
+
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+Werkzeug==2.3.7
+Jinja2==3.1.2
+python-dotenv==1.0.0
+qrcode==7.4.2
+Pillow==10.0.0
+requests==2.31.0
+
+
+# admin_api_sync.html
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sincronização com API</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-sync-alt"></i>
+                <h1>SINCRONIZAÇÃO COM API</h1>
+            </div>
+            <p class="subtitle">Importe OPs automaticamente do Systêxtil</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+            <a href="/admin/api_sync" class="nav-link active">
+                <i class="fas fa-sync-alt"></i> API Sync
+            </a>
+        </div>
+        
+        <!-- Status da API -->
+        <div class="api-status-section">
+            <h3><i class="fas fa-plug"></i> Status da Conexão</h3>
+            <div class="api-status-grid">
+                <div class="api-status-card">
+                    <div class="api-status-icon">
+                        <i class="fas fa-server"></i>
+                    </div>
+                    <div class="api-status-content">
+                        <h4>API Externa</h4>
+                        <p class="api-status-text" id="api-status">Testando conexão...</p>
+                        <p class="api-config">
+                            <small>URL: {{ api_config.base_url }}</small><br>
+                            <small>Client ID: {{ api_config.client_id }}</small>
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="api-status-card">
+                    <div class="api-status-icon">
+                        <i class="fas fa-history"></i>
+                    </div>
+                    <div class="api-status-content">
+                        <h4>Última Sincronização</h4>
+                        <p class="api-last-sync">
+                            {% if last_success %}
+                            {{ last_success.data_execucao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            Nunca realizada
+                            {% endif %}
+                        </p>
+                        <p class="api-stats">
+                            {{ sync_success }} sucessos / {{ sync_error }} erros
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="api-actions">
+                <button onclick="testAPIConnection()" class="btn btn-primary">
+                    <i class="fas fa-plug"></i> Testar Conexão
+                </button>
+                <button onclick="syncNow()" class="btn btn-success">
+                    <i class="fas fa-sync-alt"></i> Sincronizar Agora
+                </button>
+                <button onclick="showConfigModal()" class="btn btn-outline">
+                    <i class="fas fa-cog"></i> Configurações
+                </button>
+            </div>
+        </div>
+        
+        <!-- Logs de Sincronização -->
+        <div class="sync-logs-section">
+            <h3><i class="fas fa-history"></i> Histórico de Sincronizações</h3>
+            <div class="table-container">
+                <table id="sync-logs-table">
+                    <thead>
+                        <tr>
+                            <th>Data/Hora</th>
+                            <th>Tipo</th>
+                            <th>Registros</th>
+                            <th>Duração</th>
+                            <th>Status</th>
+                            <th>Mensagem</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr class="log-{{ log.status }}">
+                            <td>{{ log.data_execucao.strftime('%d/%m/%Y %H:%M') }}</td>
+                            <td>{{ log.tipo|upper }}</td>
+                            <td>
+                                <span class="log-stats">
+                                    {{ log.registros_novos }}N / {{ log.registros_atualizados }}A
+                                </span>
+                            </td>
+                            <td>{{ log.duracao_segundos|round(2) }}s</td>
+                            <td>
+                                <span class="status-badge status-{{ log.status }}">
+                                    {% if log.status == 'sucesso' %}
+                                        <i class="fas fa-check-circle"></i>
+                                    {% elif log.status == 'erro' %}
+                                        <i class="fas fa-times-circle"></i>
+                                    {% else %}
+                                        <i class="fas fa-exclamation-circle"></i>
+                                    {% endif %}
+                                    {{ log.status|upper }}
+                                </span>
+                            </td>
+                            <td class="log-message">{{ log.mensagem|truncate(50) }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center">Nenhum log de sincronização encontrado</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="sync-controls">
+                <button onclick="loadMoreLogs()" class="btn btn-secondary">
+                    <i class="fas fa-redo"></i> Carregar Mais
+                </button>
+                <button onclick="clearLogs()" class="btn btn-outline">
+                    <i class="fas fa-trash"></i> Limpar Logs Antigos
+                </button>
+            </div>
+        </div>
+        
+        <!-- Informações da API -->
+        <div class="api-info-section">
+            <h3><i class="fas fa-info-circle"></i> Informações da API</h3>
+            <div class="api-info-grid">
+                <div class="api-info-card">
+                    <h4><i class="fas fa-database"></i> O que é sincronizado?</h4>
+                    <ul>
+                        <li>Ordens de Produção (OPs)</li>
+                        <li>Quantidades carregadas e produzidas</li>
+                        <li>Status e estágios das OPs</li>
+                        <li>Máquinas atribuídas</li>
+                        <li>Observações e metadados</li>
+                    </ul>
+                </div>
+                
+                <div class="api-info-card">
+                    <h4><i class="fas fa-clock"></i> Como funciona?</h4>
+                    <ul>
+                        <li>Conexão segura via OAuth2</li>
+                        <li>Atualização incremental (apenas mudanças)</li>
+                        <li>Preserva dados locais não sincronizados</li>
+                        <li>Log detalhado de todas as operações</li>
+                        <li>Reconciliação automática de conflitos</li>
+                    </ul>
+                </div>
+                
+                <div class="api-info-card">
+                    <h4><i class="fas fa-exclamation-triangle"></i> Considerações</h4>
+                    <ul>
+                        <li>Requer acesso à internet</li>
+                        <li>Credenciais devem ser configuradas</li>
+                        <li>OPs locais têm prioridade em conflitos</li>
+                        <li>Backup recomendado antes da sincronização</li>
+                        <li>Logs são mantidos por 30 dias</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Configurações Automáticas -->
+        <div class="auto-sync-section">
+            <h3><i class="fas fa-robot"></i> Sincronização Automática</h3>
+            <div class="auto-sync-config">
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="auto-sync-enabled">
+                        Habilitar sincronização automática
+                    </label>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="sync-interval">Intervalo:</label>
+                        <select id="sync-interval">
+                            <option value="15">15 minutos</option>
+                            <option value="30" selected>30 minutos</option>
+                            <option value="60">1 hora</option>
+                            <option value="240">4 horas</option>
+                            <option value="720">12 horas</option>
+                            <option value="1440">1 dia</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="sync-time">Horário preferencial:</label>
+                        <input type="time" id="sync-time" value="06:00">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="sync-notifications" checked>
+                        Notificar sobre novas OPs
+                    </label>
+                </div>
+                
+                <button onclick="saveAutoSyncConfig()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Configurações
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal de Configuração -->
+    <div id="configModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-cog"></i> Configurações da API</h3>
+                <button onclick="hideConfigModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="api-base-url">URL Base da API:</label>
+                    <input type="text" id="api-base-url" 
+                           value="{{ api_config.base_url }}"
+                           placeholder="https://promoda.systextil.com.br/apexbd/erp">
+                </div>
+                
+                <div class="form-group">
+                    <label for="api-token-url">URL de Token:</label>
+                    <input type="text" id="api-token-url"
+                           value="{{ api_config.token_url or 'https://promoda.systextil.com.br/apexbd/erp/oauth/token' }}"
+                           placeholder="https://promoda.systextil.com.br/apexbd/erp/oauth/token">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="api-client-id">Client ID:</label>
+                        <input type="text" id="api-client-id" 
+                               value="{{ api_config.raw_client_id or '' }}"
+                               placeholder="vM_z3JIQSR7fMml912X4Wg..">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="api-client-secret">Client Secret:</label>
+                        <input type="password" id="api-client-secret"
+                               value="{{ api_config.raw_client_secret or '' }}"
+                               placeholder="v6CnE7I6vI6JkYn7DOIQ6A..">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="api-endpoint">Endpoint de OPs:</label>
+                    <input type="text" id="api-endpoint"
+                           value="/systextil-intg-plm/api_pcp_ops"
+                           placeholder="/systextil-intg-plm/api_pcp_ops">
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveAPIConfig()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Configurações
+                </button>
+                <button onclick="hideConfigModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Testar conexão com API
+        async function testAPIConnection() {
+            const statusElement = document.getElementById('api-status');
+            statusElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando conexão...';
+            
+            try {
+                const response = await fetch('/api/sync/test_connection');
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusElement.innerHTML = '<i class="fas fa-check-circle"></i> Conectado com sucesso!';
+                    statusElement.style.color = '#28a745';
+                    
+                    if (result.token_expiry) {
+                        const expiry = new Date(result.token_expiry);
+                        const now = new Date();
+                        const diff = Math.floor((expiry - now) / 60000); // minutos
+                        
+                        statusElement.innerHTML += `<br><small>Token válido por mais ${diff} minutos</small>`;
+                    }
+                } else {
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                }
+            } catch (error) {
+                statusElement.innerHTML = `<i class="fas fa-times-circle"></i> Erro: ${error.message}`;
+                statusElement.style.color = '#dc3545';
+            }
+        }
+        
+        // Sincronizar agora
+        async function syncNow() {
+            if (!confirm('Deseja sincronizar as OPs com a API agora?\nEsta operação pode demorar alguns minutos.')) {
+                return;
+            }
+            
+            const statusElement = document.getElementById('api-status');
+            statusElement.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Sincronizando...';
+            
+            try {
+                const response = await fetch('/api/sync/ops', {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusElement.innerHTML = `<i class="fas fa-check-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#28a745';
+                    
+                    // Recarregar a página após 2 segundos para mostrar os novos logs
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                }
+            } catch (error) {
+                statusElement.innerHTML = `<i class="fas fa-times-circle"></i> Erro: ${error.message}`;
+                statusElement.style.color = '#dc3545';
+            }
+        }
+        
+        // Carregar mais logs
+        async function loadMoreLogs() {
+            try {
+                const response = await fetch('/api/sync/logs');
+                const logs = await response.json();
+                
+                // Implementar lógica para adicionar mais logs à tabela
+                alert('Funcionalidade de carregar mais logs será implementada na próxima versão!');
+            } catch (error) {
+                alert('Erro ao carregar logs: ' + error.message);
+            }
+        }
+        
+        // Limpar logs antigos
+        async function clearLogs() {
+            if (!confirm('Deseja limpar logs de sincronização com mais de 30 dias?')) {
+                return;
+            }
+            
+            alert('Funcionalidade de limpar logs será implementada na próxima versão!');
+        }
+        
+        // Configuração da API
+        function showConfigModal() {
+            document.getElementById('configModal').classList.add('show');
+        }
+        
+        function hideConfigModal() {
+            document.getElementById('configModal').classList.remove('show');
+        }
+        
+        async function saveAPIConfig() {
+            const config = {
+                base_url: document.getElementById('api-base-url').value,
+                token_url: document.getElementById('api-token-url').value,
+                client_id: document.getElementById('api-client-id').value,
+                client_secret: document.getElementById('api-client-secret').value,
+                endpoint: document.getElementById('api-endpoint').value
+            };
+            
+            try {
+                // Em produção, isso salvaria no banco de dados ou arquivo .env
+                alert('Configurações salvas localmente. Em produção, estas configurações seriam salvas no servidor.');
+                hideConfigModal();
+                
+                // Atualizar status
+                document.getElementById('api-status').innerHTML = 
+                    '<i class="fas fa-info-circle"></i> Configurações atualizadas. Teste a conexão.';
+                
+            } catch (error) {
+                alert('Erro ao salvar configurações: ' + error.message);
+            }
+        }
+        
+        // Configuração de sincronização automática
+        async function saveAutoSyncConfig() {
+            const config = {
+                enabled: document.getElementById('auto-sync-enabled').checked,
+                interval: document.getElementById('sync-interval').value,
+                time: document.getElementById('sync-time').value,
+                notifications: document.getElementById('sync-notifications').checked
+            };
+            
+            alert('Configurações de sincronização automática salvas localmente.');
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            // Testar conexão automaticamente
+            testAPIConnection();
+            
+            // Carregar configurações salvas
+            const savedConfig = localStorage.getItem('api_auto_sync');
+            if (savedConfig) {
+                const config = JSON.parse(savedConfig);
+                document.getElementById('auto-sync-enabled').checked = config.enabled || false;
+                document.getElementById('sync-interval').value = config.interval || '30';
+                document.getElementById('sync-time').value = config.time || '06:00';
+                document.getElementById('sync-notifications').checked = config.notifications !== false;
+            }
+        });
+    </script>
+</body>
+</html>
+
+# admin_dashboard.html
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-chart-line"></i>
+                <h1>DASHBOARD ADMINISTRATIVO</h1>
+            </div>
+            <p class="subtitle">Bem-vindo, {{ session.get('usuario_nome', 'Administrador') }}</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link active">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+            <a href="/admin/setup" class="nav-link">
+                <i class="fas fa-cog"></i> Setup
+            </a>
+        </div>
+        
+        <!-- Cartões de Estatísticas -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-boxes"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Total de OPs</h3>
+                    <p class="stat-number">{{ total_ops }}</p>
+                    <p class="stat-subtext">{{ ops_andamento }} em andamento</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Máquinas Ativas</h3>
+                    <p class="stat-number">{{ maquinas_ativas }}/{{ total_maquinas }}</p>
+                    <p class="stat-subtext">{{ ((maquinas_ativas/total_maquinas)*100)|round(1) if total_maquinas > 0 else 0 }}% disponibilidade</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-ruler"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Produção Hoje</h3>
+                    <p class="stat-number">{{ producao_hoje|round(2) }}m</p>
+                    <p class="stat-subtext">{{ (producao_hoje/1000)|round(1) if producao_hoje > 0 else 0 }}km</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>OPs Finalizadas</h3>
+                    <p class="stat-number">{{ ops_finalizadas }}</p>
+                    <p class="stat-subtext">{{ (ops_finalizadas/total_ops*100)|round(1) if total_ops > 0 else 0 }}% do total</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Status das Máquinas -->
+        <div class="section">
+            <h3><i class="fas fa-cogs"></i> Status das Máquinas</h3>
+            <div class="machines-status-grid">
+                {% for maquina in maquinas %}
+                <div class="machine-status-card {{ maquina.status }}">
+                    <div class="machine-status-header">
+                        <div class="machine-icon-small">
+                            <i class="fas fa-industry"></i>
+                        </div>
+                        <div>
+                            <h4>{{ maquina.nome }}</h4>
+                            <p class="machine-code-small">{{ maquina.codigo }}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="machine-status-info">
+                        <span class="status-badge {{ maquina.status }}">
+                            {% if maquina.status == 'trabalhando' %}
+                                <i class="fas fa-play-circle"></i> PRODUZINDO
+                            {% elif maquina.status == 'parada' %}
+                                <i class="fas fa-stop-circle"></i> PARADA
+                            {% else %}
+                                <i class="fas fa-wrench"></i> {{ maquina.status|upper }}
+                            {% endif %}
+                        </span>
+                        
+                        <div class="machine-setor-small">
+                            {{ maquina.setor|upper }}
+                        </div>
+                    </div>
+                    
+                    {% if maquina.status == 'trabalhando' %}
+                    {% set op_atual = maquina.op_atual[0] if maquina.op_atual else None %}
+                    <div class="machine-op-info">
+                        {% if op_atual %}
+                        <p><i class="fas fa-box"></i> OP {{ op_atual.op }}</p>
+                        <p>{{ op_atual.produto[:15] }}...</p>
+                        {% else %}
+                        <p><i class="fas fa-info-circle"></i> Sem OP atribuída</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <!-- Últimos Apontamentos -->
+        <div class="section">
+            <h3><i class="fas fa-history"></i> Últimos Apontamentos</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Hora</th>
+                            <th>Operador</th>
+                            <th>Máquina</th>
+                            <th>OP</th>
+                            <th>Metros</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for apontamento in ultimos_apontamentos %}
+                        <tr>
+                            <td>{{ apontamento.data_hora_inicio.strftime('%H:%M') }}</td>
+                            <td>
+                                {% if apontamento.usuario %}
+                                {{ apontamento.usuario.nome }}
+                                {% else %}
+                                Usuário não encontrado
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if apontamento.maquina %}
+                                {{ apontamento.maquina.nome }}
+                                {% else %}
+                                Máquina não encontrada
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if apontamento.op %}
+                                OP {{ apontamento.op.op }}
+                                {% else %}
+                                OP não encontrada
+                                {% endif %}
+                            </td>
+                            <td>{{ apontamento.metros_processados|round(2) }}m</td>
+                            <td>
+                                <span class="status-badge {{ apontamento.status_apontamento }}">
+                                    {% if apontamento.status_apontamento == 'finalizado' %}
+                                        <i class="fas fa-check-circle"></i>
+                                    {% elif apontamento.status_apontamento == 'em_andamento' %}
+                                        <i class="fas fa-play-circle"></i>
+                                    {% else %}
+                                        <i class="fas fa-pause-circle"></i>
+                                    {% endif %}
+                                    {{ apontamento.status_apontamento|upper }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center">Nenhum apontamento registrado ainda</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Ações Rápidas -->
+        <div class="section">
+            <h3><i class="fas fa-bolt"></i> Ações Rápidas</h3>
+            <div class="quick-actions-grid">
+                <a href="/admin/ops?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar OP</h4>
+                    <p>Criar nova ordem de produção</p>
+                </a>
+                
+                <a href="/admin/maquinas?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar Máquina</h4>
+                    <p>Cadastrar nova máquina</p>
+                </a>
+                
+                <a href="/admin/usuarios?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar Usuário</h4>
+                    <p>Criar novo colaborador</p>
+                </a>
+                
+                <a href="/scanner" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-qrcode"></i>
+                    </div>
+                    <h4>Testar Scanner</h4>
+                    <p>Verificar leitura QR Code</p>
+                </a>
+                
+                <a href="/admin/setup" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <h4>Configuração</h4>
+                    <p>Setup inicial do sistema</p>
+                </a>
+                
+                <button onclick="syncData()" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-sync-alt"></i>
+                    </div>
+                    <h4>Sincronizar</h4>
+                    <p>Atualizar dados do sistema</p>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Informações do Sistema -->
+        <div class="system-info-card">
+            <h3><i class="fas fa-info-circle"></i> Informações do Sistema</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h4>Banco de Dados</h4>
+                        <p>{{ total_ops }} OPs, {{ total_maquinas }} máquinas, {{ usuarios_com_qr|length if usuarios_com_qr else 0 }} usuários</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-calendar-alt"></i>
+                    <div>
+                        <h4>Data/Hora</h4>
+                        <p id="current-datetime">{{ now().strftime('%d/%m/%Y %H:%M:%S') }}</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-server"></i>
+                    <div>
+                        <h4>Status do Sistema</h4>
+                        <p class="status-online"><i class="fas fa-circle"></i> Online e funcionando</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Atualizar data/hora
+        function updateDateTime() {
+            const now = new Date();
+            const datetime = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR');
+            document.getElementById('current-datetime').textContent = datetime;
+        }
+        
+        // Atualizar a cada segundo
+        setInterval(updateDateTime, 1000);
+        
+        // Sincronizar dados
+        function syncData() {
+            alert('Funcionalidade de sincronização será implementada na próxima versão!');
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateDateTime();
+        });
+    </script>
+</body>
+</html>
+
+ <!-- admin_maquinas.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Máquinas</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-industry"></i>
+                <h1>GERENCIAR MÁQUINAS</h1>
+            </div>
+            <p class="subtitle">Cadastre e gerencie todas as máquinas do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link active">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddMaquinaModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Nova Máquina
+            </button>
+            
+            <button onclick="printAllQRCodes()" class="btn btn-secondary">
+                <i class="fas fa-print"></i> Imprimir Todos QR Codes
+            </button>
+        </div>
+        
+        <div class="machines-grid">
+            {% for item in maquinas_com_qr %}
+            <div class="machine-card">
+                <div class="machine-header">
+                    <div class="machine-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <div class="machine-info">
+                        <h3>{{ item.maquina.nome }}</h3>
+                        <p class="machine-code">{{ item.maquina.codigo }}</p>
+                        <p class="machine-setor">{{ item.maquina.setor|upper }}</p>
+                    </div>
+                </div>
+                
+                <div class="machine-status">
+                    <span class="status-badge {{ item.maquina.status }}">
+                        {% if item.maquina.status == 'trabalhando' %}
+                            <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                        {% elif item.maquina.status == 'parada' %}
+                            <i class="fas fa-stop-circle"></i> PARADA
+                        {% else %}
+                            <i class="fas fa-wrench"></i> {{ item.maquina.status|upper }}
+                        {% endif %}
+                    </span>
+                </div>
+                
+                <div class="machine-qr">
+                    <img src="{{ item.qr_code }}" alt="QR Code da máquina" class="qr-image">
+                    <p class="qr-code-text">{{ item.maquina.codigo_qr }}</p>
+                </div>
+                
+                <div class="machine-details">
+                    <p><i class="fas fa-cog"></i> Tipo: {{ item.maquina.tipo_maquina or 'Não especificado' }}</p>
+                    <p><i class="fas fa-calendar"></i> Cadastrada em: {{ item.maquina.data_cadastro.strftime('%d/%m/%Y') }}</p>
+                </div>
+                
+                <div class="machine-actions">
+                    <button onclick="editMaquina({{ item.maquina.id }})" class="btn-icon" title="Editar">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button onclick="viewMaquinaHistory({{ item.maquina.id }})" class="btn-icon" title="Histórico">
+                        <i class="fas fa-history"></i>
+                    </button>
+                    <button onclick="printQRCode('{{ item.maquina.codigo_qr }}')" class="btn-icon" title="Imprimir QR Code">
+                        <i class="fas fa-print"></i>
+                    </button>
+                    <button onclick="changeStatus({{ item.maquina.id }})" class="btn-icon" title="Alterar Status">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Máquinas</h4>
+                <p class="summary-number">{{ maquinas_com_qr|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Em Produção</h4>
+                {% set em_producao = maquinas_com_qr|selectattr('maquina.status', 'equalto', 'trabalhando')|list|length %}
+                <p class="summary-number">{{ em_producao }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Paradas</h4>
+                {% set paradas = maquinas_com_qr|selectattr('maquina.status', 'equalto', 'parada')|list|length %}
+                <p class="summary-number">{{ paradas }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Por Setor</h4>
+                <p class="summary-number">Vários</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar máquina -->
+    <div id="maquinaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-maquina-title"><i class="fas fa-plus-circle"></i> Nova Máquina</h3>
+                <button onclick="hideMaquinaModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="maquinaForm">
+                    <input type="hidden" id="maquina_id" name="maquina_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo_qr">Código QR *</label>
+                            <input type="text" id="codigo_qr" name="codigo_qr" required 
+                                   placeholder="Ex: JIGGER01" oninput="generateQRCodePreview()">
+                            <small>Este código será usado para escanear a máquina</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="codigo">Código da Máquina *</label>
+                            <input type="text" id="codigo" name="codigo" required 
+                                   placeholder="Ex: TING.001.00001">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="nome">Nome da Máquina *</label>
+                            <input type="text" id="nome" name="nome" required 
+                                   placeholder="Ex: Jigger 1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="tipo_maquina">Tipo de Máquina</label>
+                            <input type="text" id="tipo_maquina" name="tipo_maquina" 
+                                   placeholder="Ex: jigger, turbo, stork">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="setor">Setor *</label>
+                            <select id="setor" name="setor" required>
+                                <option value="">Selecione um setor...</option>
+                                <option value="preparacao">Preparação</option>
+                                <option value="tingimento">Tingimento</option>
+                                <option value="estampagem">Estampagem</option>
+                                <option value="acabamento">Acabamento</option>
+                                <option value="controle_qualidade">Controle de Qualidade</option>
+                                <option value="expedicao">Expedição</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="status">Status Inicial</label>
+                            <select id="status" name="status">
+                                <option value="parada" selected>Parada</option>
+                                <option value="trabalhando">Trabalhando</option>
+                                <option value="manutencao">Manutenção</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="descricao">Descrição (opcional)</label>
+                        <textarea id="descricao" name="descricao" rows="2" 
+                                  placeholder="Descrição adicional da máquina..."></textarea>
+                    </div>
+                    
+                    <div class="qr-preview" id="qr-preview">
+                        <h4>Pré-visualização do QR Code:</h4>
+                        <div id="qr-preview-image" class="qr-preview-placeholder">
+                            <i class="fas fa-qrcode"></i>
+                            <p>Digite o código QR para gerar a pré-visualização</p>
+                        </div>
+                        <p class="qr-info">Este QR Code será usado para identificar a máquina no sistema</p>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveMaquina()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Máquina
+                </button>
+                <button onclick="hideMaquinaModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddMaquinaModal() {
+            document.getElementById('modal-maquina-title').innerHTML = '<i class="fas fa-plus-circle"></i> Nova Máquina';
+            document.getElementById('maquinaForm').reset();
+            document.getElementById('maquina_id').value = '';
+            document.getElementById('qr-preview-image').innerHTML = `
+                <i class="fas fa-qrcode"></i>
+                <p>Digite o código QR para gerar a pré-visualização</p>
+            `;
+            document.getElementById('maquinaModal').classList.add('show');
+        }
+        
+        function hideMaquinaModal() {
+            document.getElementById('maquinaModal').classList.remove('show');
+        }
+        
+        async function generateQRCodePreview() {
+            const qrCode = document.getElementById('codigo_qr').value;
+            if (qrCode) {
+                try {
+                    const response = await fetch(`/api/generate_qr?text=${encodeURIComponent(qrCode)}`);
+                    const qrData = await response.json();
+                    
+                    document.getElementById('qr-preview-image').innerHTML = `
+                        <img src="${qrData.qr_code}" alt="QR Code Preview" style="max-width: 150px;">
+                        <p>${qrCode}</p>
+                    `;
+                } catch (error) {
+                    console.error('Erro ao gerar QR Code:', error);
+                }
+            }
+        }
+        
+        async function saveMaquina() {
+            const form = document.getElementById('maquinaForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo_qr: formData.get('codigo_qr'),
+                codigo: formData.get('codigo'),
+                nome: formData.get('nome'),
+                setor: formData.get('setor'),
+                tipo_maquina: formData.get('tipo_maquina'),
+                status: formData.get('status'),
+                descricao: formData.get('descricao')
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_maquina', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideMaquinaModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editMaquina(maquinaId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function viewMaquinaHistory(maquinaId) {
+            window.location.href = `/admin/maquina/${maquinaId}/history`;
+        }
+        
+        function printQRCode(qrCode) {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>QR Code - ${qrCode}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                        .qr-container { margin: 20px auto; }
+                        .machine-info { margin-top: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <h2>QR Code para Máquina</h2>
+                    <div class="qr-container">
+                        <img src="${generateQRCodeImage(qrCode)}" alt="QR Code" width="200">
+                    </div>
+                    <div class="machine-info">
+                        <h3>Código: ${qrCode}</h3>
+                        <p>Escaneie este código para identificar a máquina no sistema</p>
+                        <p><small>Gerado em: ${new Date().toLocaleDateString()}</small></p>
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        function printAllQRCodes() {
+            const printWindow = window.open('', '_blank');
+            let content = `
+                <html>
+                <head>
+                    <title>Todos os QR Codes</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; }
+                        .qr-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+                        .qr-item { text-align: center; border: 1px solid #ddd; padding: 15px; }
+                        @media print {
+                            .qr-grid { grid-template-columns: repeat(4, 1fr); }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>QR Codes das Máquinas</h1>
+                    <div class="qr-grid">
+            `;
+            
+            {% for item in maquinas_com_qr %}
+            content += `
+                <div class="qr-item">
+                    <img src="${item.qr_code}" alt="QR Code" width="120">
+                    <h4>${item.maquina.nome}</h4>
+                    <p>${item.maquina.codigo}</p>
+                    <p><strong>QR: ${item.maquina.codigo_qr}</strong></p>
+                </div>
+            `;
+            {% endfor %}
+            
+            content += `
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `;
+            
+            printWindow.document.write(content);
+            printWindow.document.close();
+        }
+        
+        function changeStatus(maquinaId) {
+            const newStatus = prompt('Novo status (trabalhando/parada/manutencao):');
+            if (newStatus && ['trabalhando', 'parada', 'manutencao'].includes(newStatus)) {
+                // Implementar mudança de status
+                alert(`Status alterado para: ${newStatus}`);
+            }
+        }
+        
+        function generateQRCodeImage(text) {
+            // Esta função seria implementada no backend
+            // Por enquanto, retorna uma imagem de placeholder
+            return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(text)}`;
+        }
+    </script>
+</body>
+</html>
+
+<!-- admin_motivos_parada.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motivos de Parada</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h1>MOTIVOS DE PARADA</h1>
+            </div>
+            <p class="subtitle">Configure os motivos de parada para apontamento de produção</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link active">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddMotivoModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Novo Motivo
+            </button>
+            
+            <div class="view-toggle">
+                <button onclick="showCategorizedView()" class="btn btn-outline active">
+                    <i class="fas fa-list"></i> Visualização por Categoria
+                </button>
+                <button onclick="showListView()" class="btn btn-outline">
+                    <i class="fas fa-table"></i> Visualização em Lista
+                </button>
+            </div>
+        </div>
+        
+        <!-- Visualização por Categoria -->
+        <div id="categorized-view" class="categorized-view">
+            {% set categorias = motivos|groupby('categoria') %}
+            {% for categoria, motivos_categoria in categorias %}
+            <div class="category-card">
+                <div class="category-header">
+                    <h3>{{ categoria|upper }}</h3>
+                    <span class="count-badge">{{ motivos_categoria|length }} motivos</span>
+                </div>
+                
+                <div class="motivos-grid">
+                    {% for motivo in motivos_categoria %}
+                    <div class="motivo-card {{ motivo.cor }}">
+                        <div class="motivo-header">
+                            <div class="motivo-icon">
+                                {% if motivo.categoria == 'tecnica' %}
+                                <i class="fas fa-tools"></i>
+                                {% elif motivo.categoria == 'organizacional' %}
+                                <i class="fas fa-users"></i>
+                                {% elif motivo.categoria == 'logistica' %}
+                                <i class="fas fa-truck"></i>
+                                {% elif motivo.categoria == 'planejada' %}
+                                <i class="fas fa-calendar-check"></i>
+                                {% else %}
+                                <i class="fas fa-exclamation-circle"></i>
+                                {% endif %}
+                            </div>
+                            <div class="motivo-info">
+                                <h4>{{ motivo.descricao }}</h4>
+                                <p class="motivo-codigo">{{ motivo.codigo }}</p>
+                            </div>
+                        </div>
+                        
+                        <div class="motivo-details">
+                            <div class="detail-item">
+                                <span class="detail-label">Categoria:</span>
+                                <span class="detail-value">{{ motivo.categoria }}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Cor:</span>
+                                <span class="detail-value">{{ motivo.cor }}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Justificativa:</span>
+                                <span class="detail-value">
+                                    {% if motivo.requer_justificativa %}
+                                    <i class="fas fa-check-circle text-success"></i> Obrigatória
+                                    {% else %}
+                                    <i class="fas fa-times-circle text-muted"></i> Opcional
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Status:</span>
+                                <span class="detail-value">
+                                    {% if motivo.ativo %}
+                                    <i class="fas fa-check-circle text-success"></i> Ativo
+                                    {% else %}
+                                    <i class="fas fa-times-circle text-danger"></i> Inativo
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="motivo-actions">
+                            <button onclick="editMotivo({{ motivo.id }})" class="btn-icon" title="Editar">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="toggleMotivoStatus({{ motivo.id }}, {{ motivo.ativo }})" 
+                                    class="btn-icon" title="{{ 'Desativar' if motivo.ativo else 'Ativar' }}">
+                                {% if motivo.ativo %}
+                                <i class="fas fa-toggle-on"></i>
+                                {% else %}
+                                <i class="fas fa-toggle-off"></i>
+                                {% endif %}
+                            </button>
+                            <button onclick="viewMotivoStats({{ motivo.id }})" class="btn-icon" title="Estatísticas">
+                                <i class="fas fa-chart-bar"></i>
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Visualização em Lista -->
+        <div id="list-view" class="list-view" style="display: none;">
+            <div class="table-container">
+                <table id="motivos-table">
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Descrição</th>
+                            <th>Categoria</th>
+                            <th>Cor</th>
+                            <th>Justificativa</th>
+                            <th>Ordem</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for motivo in motivos %}
+                        <tr data-categoria="{{ motivo.categoria }}" data-ativo="{{ motivo.ativo }}">
+                            <td><strong>{{ motivo.codigo }}</strong></td>
+                            <td>{{ motivo.descricao }}</td>
+                            <td>
+                                <span class="categoria-badge {{ motivo.categoria }}">
+                                    {{ motivo.categoria|upper }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="color-preview" style="background-color: {{ motivo.cor }};"></div>
+                                <span>{{ motivo.cor }}</span>
+                            </td>
+                            <td>
+                                {% if motivo.requer_justificativa %}
+                                <i class="fas fa-check-circle text-success"></i> Obrigatória
+                                {% else %}
+                                <i class="fas fa-times-circle text-muted"></i> Opcional
+                                {% endif %}
+                            </td>
+                            <td>{{ motivo.ordem_exibicao }}</td>
+                            <td>
+                                {% if motivo.ativo %}
+                                <span class="status-badge active">
+                                    <i class="fas fa-check-circle"></i> ATIVO
+                                </span>
+                                {% else %}
+                                <span class="status-badge inactive">
+                                    <i class="fas fa-times-circle"></i> INATIVO
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button onclick="editMotivo({{ motivo.id }})" class="btn-icon" title="Editar">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button onclick="toggleMotivoStatus({{ motivo.id }}, {{ motivo.ativo }})" 
+                                            class="btn-icon" title="{{ 'Desativar' if motivo.ativo else 'Ativar' }}">
+                                        {% if motivo.ativo %}
+                                        <i class="fas fa-toggle-on"></i>
+                                        {% else %}
+                                        <i class="fas fa-toggle-off"></i>
+                                        {% endif %}
+                                    </button>
+                                    <button onclick="viewMotivoStats({{ motivo.id }})" class="btn-icon" title="Estatísticas">
+                                        <i class="fas fa-chart-bar"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Motivos</h4>
+                <p class="summary-number">{{ motivos|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Motivos Ativos</h4>
+                {% set ativos = motivos|selectattr('ativo', 'equalto', true)|list|length %}
+                <p class="summary-number">{{ ativos }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Categorias</h4>
+                {% set categorias_unicas = motivos|map(attribute='categoria')|unique|list|length %}
+                <p class="summary-number">{{ categorias_unicas }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Com Justificativa</h4>
+                {% set com_justificativa = motivos|selectattr('requer_justificativa', 'equalto', true)|list|length %}
+                <p class="summary-number">{{ com_justificativa }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar/editar motivo -->
+    <div id="motivoModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-motivo-title"><i class="fas fa-plus-circle"></i> Novo Motivo de Parada</h3>
+                <button onclick="hideMotivoModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="motivoForm">
+                    <input type="hidden" id="motivo_id" name="motivo_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo">Código *</label>
+                            <input type="text" id="codigo" name="codigo" required 
+                                   placeholder="Ex: ENE001, MAN001">
+                            <small>Identificador único para o motivo</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="descricao">Descrição *</label>
+                            <input type="text" id="descricao" name="descricao" required 
+                                   placeholder="Ex: Falta de energia, Manutenção corretiva">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="categoria">Categoria *</label>
+                            <select id="categoria" name="categoria" required>
+                                <option value="">Selecione uma categoria...</option>
+                                <option value="tecnica">Técnica</option>
+                                <option value="organizacional">Organizacional</option>
+                                <option value="logistica">Logística</option>
+                                <option value="planejada">Planejada</option>
+                                <option value="qualidade">Qualidade</option>
+                                <option value="diversos">Diversos</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="cor">Cor *</label>
+                            <select id="cor" name="cor" required>
+                                <option value="">Selecione uma cor...</option>
+                                <option value="vermelho">Vermelho</option>
+                                <option value="laranja">Laranja</option>
+                                <option value="amarelo">Amarelo</option>
+                                <option value="verde">Verde</option>
+                                <option value="azul">Azul</option>
+                                <option value="roxo">Roxo</option>
+                                <option value="cinza">Cinza</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="ordem_exibicao">Ordem de Exibição</label>
+                            <input type="number" id="ordem_exibicao" name="ordem_exibicao" 
+                                   value="0" min="0" max="100">
+                            <small>Define a ordem na lista (menor = primeiro)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="requer_justificativa">Requer Justificativa</label>
+                            <select id="requer_justificativa" name="requer_justificativa">
+                                <option value="false">Não</option>
+                                <option value="true">Sim</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ativo" name="ativo" checked>
+                            Motivo Ativo
+                        </label>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveMotivo()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Motivo
+                </button>
+                <button onclick="hideMotivoModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddMotivoModal() {
+            document.getElementById('modal-motivo-title').innerHTML = '<i class="fas fa-plus-circle"></i> Novo Motivo de Parada';
+            document.getElementById('motivoForm').reset();
+            document.getElementById('motivo_id').value = '';
+            document.getElementById('ativo').checked = true;
+            document.getElementById('motivoModal').classList.add('show');
+        }
+        
+        function hideMotivoModal() {
+            document.getElementById('motivoModal').classList.remove('show');
+        }
+        
+        async function saveMotivo() {
+            const form = document.getElementById('motivoForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo: formData.get('codigo'),
+                descricao: formData.get('descricao'),
+                categoria: formData.get('categoria'),
+                cor: formData.get('cor'),
+                ordem_exibicao: parseInt(formData.get('ordem_exibicao')),
+                requer_justificativa: formData.get('requer_justificativa') === 'true',
+                ativo: formData.get('ativo') === 'on'
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_motivo', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideMotivoModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editMotivo(motivoId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function toggleMotivoStatus(motivoId, isActive) {
+            const action = isActive ? 'desativar' : 'ativar';
+            const confirmMessage = `Tem certeza que deseja ${action} este motivo?`;
+            
+            if (confirm(confirmMessage)) {
+                // Implementar mudança de status
+                alert(`Motivo ${action}do com sucesso!`);
+                location.reload();
+            }
+        }
+        
+        function viewMotivoStats(motivoId) {
+            window.location.href = `/admin/motivo/${motivoId}/stats`;
+        }
+        
+        function showCategorizedView() {
+            document.getElementById('categorized-view').style.display = 'block';
+            document.getElementById('list-view').style.display = 'none';
+            
+            // Atualizar botões ativos
+            document.querySelectorAll('.view-toggle button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+        
+        function showListView() {
+            document.getElementById('categorized-view').style.display = 'none';
+            document.getElementById('list-view').style.display = 'block';
+            
+            // Atualizar botões ativos
+            document.querySelectorAll('.view-toggle button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>
+
+
+<!-- admin_ops.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar OPs</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-box"></i>
+                <h1>GERENCIAR ORDENS DE PRODUÇÃO</h1>
+            </div>
+            <p class="subtitle">Adicione, edite e visualize todas as OPs do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link active">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddOPModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Nova OP
+            </button>
+            
+            <button onclick="printAllOPs()" class="btn btn-secondary">
+                <i class="fas fa-print"></i> Imprimir Todas OPs
+            </button>
+            
+            <div class="filters">
+                <select id="filter-status" onchange="filterOPs()">
+                    <option value="">Todos os status</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="em_andamento">Em Andamento</option>
+                    <option value="finalizada">Finalizadas</option>
+                    <option value="pausado">Pausadas</option>
+                </select>
+                
+                <input type="text" id="search-op" placeholder="Buscar por OP ou produto..." 
+                       onkeyup="searchOPs()">
+            </div>
+        </div>
+        
+        <div class="ops-grid-admin">
+            {% for op in ops %}
+            <div class="op-card-admin" data-status="{{ op.status_op }}">
+                <div class="op-card-header-admin">
+                    <div class="op-number-large">
+                        <h3>OP {{ op.op }}</h3>
+                        <span class="op-status-badge-admin {{ op.status_op }}">
+                            {% if op.status_op == 'pendente' %}
+                                <i class="fas fa-clock"></i>
+                            {% elif op.status_op == 'em_andamento' %}
+                                <i class="fas fa-play-circle"></i>
+                            {% elif op.status_op == 'finalizada' %}
+                                <i class="fas fa-check-circle"></i>
+                            {% elif op.status_op == 'pausado' %}
+                                <i class="fas fa-pause-circle"></i>
+                            {% endif %}
+                            {{ op.status_op|upper }}
+                        </span>
+                    </div>
+                    
+                    <div class="op-qr-code">
+                        <img src="{{ url_for('generate_op_qr', op_number=op.op) }}" alt="QR Code OP {{ op.op }}" width="80">
+                        <small>OP {{ op.op }}</small>
+                    </div>
+                </div>
+                
+                <div class="op-card-body-admin">
+                    <div class="op-info-row">
+                        <span class="info-label">Produto:</span>
+                        <span class="info-value">{{ op.produto }}</span>
+                    </div>
+                    
+                    <div class="op-info-row">
+                        <span class="info-label">Descrição:</span>
+                        <span class="info-value">{{ op.narrativa[:50] }}{% if op.narrativa|length > 50 %}...{% endif %}</span>
+                    </div>
+                    
+                    <div class="op-info-row">
+                        <span class="info-label">Grupo:</span>
+                        <span class="info-value">{{ op.grupo or 'N/A' }}</span>
+                    </div>
+                    
+                    <div class="op-progress-admin">
+                        <div class="progress-info-admin">
+                            <span>Progresso:</span>
+                            <span>
+                                {% set percent = (op.qtde_produzida / op.qtde_carregado * 100) if op.qtde_carregado > 0 else 0 %}
+                                {{ percent|round(1) }}%
+                            </span>
+                        </div>
+                        <div class="progress-bar-admin">
+                            <div class="progress-fill-admin" style="width: {{ percent }}%"></div>
+                        </div>
+                        <div class="progress-numbers">
+                            <span>{{ op.qtde_produzida|round(2) }}m</span>
+                            <span>/</span>
+                            <span>{{ op.qtde_carregado|round(2) }}m</span>
+                        </div>
+                    </div>
+                    
+                    <div class="op-details-admin">
+                        <div class="detail-item-admin">
+                            <i class="fas fa-industry"></i>
+                            <span>
+                                {% if op.maquina_atual_rel %}
+                                {{ op.maquina_atual_rel.nome }}
+                                {% else %}
+                                Nenhuma máquina
+                                {% endif %}
+                            </span>
+                        </div>
+                        
+                        <div class="detail-item-admin">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span>{{ op.estagio_atual or 'N/A' }}</span>
+                        </div>
+                        
+                        <div class="detail-item-admin">
+                            <i class="fas fa-calendar"></i>
+                            <span>
+                                {% if op.data_inicio %}
+                                {{ op.data_inicio.strftime('%d/%m/%Y') }}
+                                {% else %}
+                                Não iniciada
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="op-card-actions-admin">
+                    <button onclick="viewOPDetails({{ op.id }})" class="btn-action" title="Visualizar Detalhes">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    
+                    <button onclick="editOP({{ op.id }})" class="btn-action" title="Editar OP">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    
+                    <button onclick="printOP({{ op.id }})" class="btn-action" title="Imprimir OP">
+                        <i class="fas fa-print"></i>
+                    </button>
+                    
+                    {% if op.status_op == 'pendente' %}
+                    <button onclick="startOP({{ op.id }})" class="btn-action" title="Iniciar Produção">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    {% elif op.status_op == 'em_andamento' %}
+                    <button onclick="pauseOP({{ op.id }})" class="btn-action" title="Pausar Produção">
+                        <i class="fas fa-pause"></i>
+                    </button>
+                    {% elif op.status_op == 'pausado' %}
+                    <button onclick="resumeOP({{ op.id }})" class="btn-action" title="Retomar Produção">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    {% endif %}
+                    
+                    <button onclick="deleteOP({{ op.id }})" class="btn-action btn-danger" title="Excluir OP">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            {% else %}
+            <div class="empty-state-admin">
+                <div class="empty-icon-admin">
+                    <i class="fas fa-inbox"></i>
+                </div>
+                <h3>Nenhuma OP Cadastrada</h3>
+                <p>Comece adicionando uma nova ordem de produção.</p>
+                <button onclick="showAddOPModal()" class="btn btn-primary">
+                    <i class="fas fa-plus-circle"></i> Adicionar Primeira OP
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de OPs</h4>
+                <p class="summary-number">{{ ops|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Metros Carregados</h4>
+                <p class="summary-number">{{ ops|sum(attribute='qtde_carregado')|round(2) }}m</p>
+            </div>
+            <div class="summary-item">
+                <h4>Metros Produzidos</h4>
+                <p class="summary-number">{{ ops|sum(attribute='qtde_produzida')|round(2) }}m</p>
+            </div>
+            <div class="summary-item">
+                <h4>Eficiência</h4>
+                {% set total_carregado = ops|sum(attribute='qtde_carregado') %}
+                {% set total_produzido = ops|sum(attribute='qtde_produzida') %}
+                {% set eficiencia = (total_produzido / total_carregado * 100) if total_carregado > 0 else 0 %}
+                <p class="summary-number">{{ eficiencia|round(1) }}%</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar/editar OP -->
+    <div id="opModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title"><i class="fas fa-box"></i> <span id="modal-action">Nova</span> OP</h3>
+                <button onclick="hideOPModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="opForm">
+                    <input type="hidden" id="op_id" name="op_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="op_number">Número da OP *</label>
+                            <input type="number" id="op_number" name="op_number" required min="1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="produto">Código do Produto *</label>
+                            <input type="text" id="produto" name="produto" placeholder="Ex: 2.K1820.TIN.000051" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="narrativa">Descrição *</label>
+                        <textarea id="narrativa" name="narrativa" rows="2" required></textarea>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="grupo">Grupo</label>
+                            <input type="text" id="grupo" name="grupo" placeholder="Ex: K1820">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="unidade_medida">Unidade de Medida</label>
+                            <select id="unidade_medida" name="unidade_medida">
+                                <option value="M" selected>Metros (M)</option>
+                                <option value="KG">Quilogramas (KG)</option>
+                                <option value="UN">Unidades (UN)</option>
+                                <option value="M2">Metros Quadrados (M²)</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="qtde_programado">Quantidade Programada *</label>
+                            <input type="number" step="0.01" id="qtde_programado" name="qtde_programado" required min="0">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="qtde_carregado">Quantidade Carregada *</label>
+                            <input type="number" step="0.01" id="qtde_carregado" name="qtde_carregado" required min="0">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="qtde_produzida">Quantidade Produzida</label>
+                            <input type="number" step="0.01" id="qtde_produzida" name="qtde_produzida" value="0" min="0">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="status_op">Status</label>
+                            <select id="status_op" name="status_op">
+                                <option value="pendente">Pendente</option>
+                                <option value="em_andamento">Em Andamento</option>
+                                <option value="finalizada">Finalizada</option>
+                                <option value="pausado">Pausada</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="estagio_atual">Estágio Atual</label>
+                            <select id="estagio_atual" name="estagio_atual">
+                                <option value="">Selecione...</option>
+                                <option value="PREPARAÇÃO">PREPARAÇÃO</option>
+                                <option value="TINGIMENTO">TINGIMENTO</option>
+                                <option value="ESTAMPAGEM">ESTAMPAGEM</option>
+                                <option value="ACABAMENTO">ACABAMENTO</option>
+                                <option value="CONTROLE QUALIDADE">CONTROLE QUALIDADE</option>
+                                <option value="EXPEDIÇÃO">EXPEDIÇÃO</option>
+                                <option value="FINALIZADO">FINALIZADO</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="estagio_posicao">Posição do Estágio</label>
+                            <input type="text" id="estagio_posicao" name="estagio_posicao" placeholder="Ex: 10, 45, 99">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="maquina_atual">Máquina Atual</label>
+                        <select id="maquina_atual" name="maquina_atual">
+                            <option value="">Nenhuma</option>
+                            {% for maquina in maquinas %}
+                            <option value="{{ maquina.id }}">{{ maquina.nome }} ({{ maquina.codigo }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="observacao">Observação</label>
+                        <textarea id="observacao" name="observacao" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveOP()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar OP
+                </button>
+                <button onclick="hideOPModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para visualizar detalhes da OP -->
+    <div id="viewModal" class="modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3 id="view-modal-title"><i class="fas fa-eye"></i> Detalhes da OP</h3>
+                <button onclick="hideViewModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div id="view-op-content">
+                    <!-- Conteúdo será carregado dinamicamente -->
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="printCurrentOP()" class="btn btn-secondary">
+                    <i class="fas fa-print"></i> Imprimir
+                </button>
+                <button onclick="hideViewModal()" class="btn">
+                    <i class="fas fa-times"></i> Fechar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentOpId = null;
+        
+        function showAddOPModal() {
+            document.getElementById('modal-action').textContent = 'Nova';
+            document.getElementById('modal-title').innerHTML = '<i class="fas fa-plus-circle"></i> Nova OP';
+            document.getElementById('opForm').reset();
+            document.getElementById('op_id').value = '';
+            document.getElementById('qtde_produzida').value = '0';
+            document.getElementById('status_op').value = 'pendente';
+            document.getElementById('unidade_medida').value = 'M';
+            document.getElementById('opModal').classList.add('show');
+        }
+        
+        function hideOPModal() {
+            document.getElementById('opModal').classList.remove('show');
+        }
+        
+        function hideViewModal() {
+            document.getElementById('viewModal').classList.remove('show');
+        }
+        
+        async function saveOP() {
+            const form = document.getElementById('opForm');
+            const formData = new FormData(form);
+            
+            const opId = formData.get('op_id');
+            const url = opId ? `/api/admin/update_op/${opId}` : '/api/admin/add_op';
+            const method = opId ? 'PUT' : 'POST';
+            
+            const data = {
+                op: parseInt(formData.get('op_number')),
+                produto: formData.get('produto'),
+                narrativa: formData.get('narrativa'),
+                grupo: formData.get('grupo'),
+                qtde_programado: parseFloat(formData.get('qtde_programado')),
+                qtde_carregado: parseFloat(formData.get('qtde_carregado')),
+                qtde_produzida: parseFloat(formData.get('qtde_produzida')),
+                unidade_medida: formData.get('unidade_medida'),
+                estagio_atual: formData.get('estagio_atual'),
+                estagio_posicao: formData.get('estagio_posicao'),
+                status_op: formData.get('status_op'),
+                maquina_atual: formData.get('maquina_atual') || null,
+                observacao: formData.get('observacao')
+            };
+            
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideOPModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        async function editOP(opId) {
+            try {
+                const response = await fetch(`/api/admin/get_op/${opId}`);
+                const op = await response.json();
+                
+                if (op) {
+                    document.getElementById('modal-action').textContent = 'Editar';
+                    document.getElementById('modal-title').innerHTML = `<i class="fas fa-edit"></i> Editar OP ${op.op}`;
+                    
+                    document.getElementById('op_id').value = op.id;
+                    document.getElementById('op_number').value = op.op;
+                    document.getElementById('produto').value = op.produto;
+                    document.getElementById('narrativa').value = op.narrativa;
+                    document.getElementById('grupo').value = op.grupo || '';
+                    document.getElementById('qtde_programado').value = op.qtde_programado;
+                    document.getElementById('qtde_carregado').value = op.qtde_carregado;
+                    document.getElementById('qtde_produzida').value = op.qtde_produzida;
+                    document.getElementById('unidade_medida').value = op.unidade_medida || 'M';
+                    document.getElementById('estagio_atual').value = op.estagio_atual || '';
+                    document.getElementById('estagio_posicao').value = op.estagio_posicao || '';
+                    document.getElementById('status_op').value = op.status_op;
+                    document.getElementById('maquina_atual').value = op.maquina_atual || '';
+                    document.getElementById('observacao').value = op.observacao || '';
+                    
+                    document.getElementById('opModal').classList.add('show');
+                }
+            } catch (error) {
+                alert('❌ Erro ao carregar OP: ' + error.message);
+            }
+        }
+        
+        async function viewOPDetails(opId) {
+            currentOpId = opId;
+            
+            try {
+                const response = await fetch(`/api/admin/get_op_details/${opId}`);
+                const op = await response.json();
+                
+                if (op) {
+                    document.getElementById('view-modal-title').innerHTML = `<i class="fas fa-eye"></i> OP ${op.op} - ${op.produto}`;
+                    
+                    const percent = op.qtde_carregado > 0 ? (op.qtde_produzida / op.qtde_carregado * 100).toFixed(1) : 0;
+                    
+                    const content = `
+                        <div class="op-view-container">
+                            <div class="op-view-header">
+                                <div class="op-view-qr">
+                                    <img src="/api/generate_op_qr/${op.op}" alt="QR Code" width="120">
+                                    <p><strong>OP ${op.op}</strong></p>
+                                </div>
+                                
+                                <div class="op-view-status">
+                                    <span class="status-badge-large ${op.status_op}">
+                                        ${op.status_op.toUpperCase()}
+                                    </span>
+                                    <p class="op-view-date">
+                                        <i class="fas fa-calendar"></i> 
+                                        Criada em: ${new Date(op.data_importacao).toLocaleDateString('pt-BR')}
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-info-circle"></i> Informações da OP</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Produto:</span>
+                                        <span class="view-value">${op.produto}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Descrição:</span>
+                                        <span class="view-value">${op.narrativa}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Grupo:</span>
+                                        <span class="view-value">${op.grupo || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Unidade:</span>
+                                        <span class="view-value">${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-chart-bar"></i> Quantidades</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Programado:</span>
+                                        <span class="view-value">${parseFloat(op.qtde_programado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Carregado:</span>
+                                        <span class="view-value">${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Produzido:</span>
+                                        <span class="view-value highlight">${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Disponível:</span>
+                                        <span class="view-value">${(parseFloat(op.qtde_carregado) - parseFloat(op.qtde_produzida)).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="op-view-progress">
+                                    <div class="progress-info-view">
+                                        <span>Progresso da Produção:</span>
+                                        <span><strong>${percent}%</strong></span>
+                                    </div>
+                                    <div class="progress-bar-view">
+                                        <div class="progress-fill-view" style="width: ${percent}%"></div>
+                                    </div>
+                                    <div class="progress-numbers-view">
+                                        <span>${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span>/</span>
+                                        <span>${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-cogs"></i> Status e Localização</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Status:</span>
+                                        <span class="view-value status-${op.status_op}">${op.status_op.toUpperCase()}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Estágio Atual:</span>
+                                        <span class="view-value">${op.estagio_atual || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Posição Estágio:</span>
+                                        <span class="view-value">${op.estagio_posicao || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Máquina Atual:</span>
+                                        <span class="view-value">${op.maquina_atual_nome || 'Nenhuma'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-history"></i> Datas</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Data Início:</span>
+                                        <span class="view-value">${op.data_inicio ? new Date(op.data_inicio).toLocaleDateString('pt-BR') : 'Não iniciada'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Data Término:</span>
+                                        <span class="view-value">${op.data_termino ? new Date(op.data_termino).toLocaleDateString('pt-BR') : 'Não finalizada'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Última Atualização:</span>
+                                        <span class="view-value">${new Date(op.sincronizado_em || op.data_importacao).toLocaleString('pt-BR')}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            ${op.observacao ? `
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-sticky-note"></i> Observação</h4>
+                                <div class="op-view-observacao">
+                                    ${op.observacao}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `;
+                    
+                    document.getElementById('view-op-content').innerHTML = content;
+                    document.getElementById('viewModal').classList.add('show');
+                }
+            } catch (error) {
+                alert('❌ Erro ao carregar detalhes da OP: ' + error.message);
+            }
+        }
+        
+        function printCurrentOP() {
+            if (currentOpId) {
+                printOP(currentOpId);
+            }
+        }
+        
+        function printOP(opId) {
+            const printWindow = window.open('', '_blank');
+            const url = `/admin/op/${opId}/print`;
+            printWindow.location.href = url;
+        }
+        
+        function printAllOPs() {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Lista de OPs</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; }
+                        .header { text-align: center; margin-bottom: 30px; }
+                        .op-list { display: grid; gap: 20px; }
+                        .op-item { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+                        .op-number { font-size: 18px; font-weight: bold; }
+                        .op-details { margin-top: 10px; }
+                        .qr-code { text-align: center; margin: 10px 0; }
+                        @media print {
+                            .op-list { grid-template-columns: repeat(2, 1fr); }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>Lista de Ordens de Produção</h1>
+                        <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')}</p>
+                    </div>
+                    <div class="op-list">
+                        <!-- O conteúdo será carregado pelo servidor -->
+                        Carregando OPs...
+                    </div>
+                    <script>
+                        // Carregar OPs via AJAX
+                        fetch('/api/admin/all_ops')
+                            .then(response => response.json())
+                            .then(ops => {
+                                const opList = document.querySelector('.op-list');
+                                opList.innerHTML = '';
+                                
+                                ops.forEach(op => {
+                                    const percent = op.qtde_carregado > 0 ? 
+                                        (op.qtde_produzida / op.qtde_carregado * 100).toFixed(1) : 0;
+                                    
+                                    const opItem = document.createElement('div');
+                                    opItem.className = 'op-item';
+                                    opItem.innerHTML = \`
+                                        <div class="op-number">OP \${op.op}</div>
+                                        <div class="qr-code">
+                                            <img src="/api/generate_op_qr/\${op.op}" alt="QR Code" width="80">
+                                        </div>
+                                        <div class="op-details">
+                                            <p><strong>Produto:</strong> \${op.produto}</p>
+                                            <p><strong>Status:</strong> \${op.status_op.toUpperCase()}</p>
+                                            <p><strong>Progresso:</strong> \${percent}%</p>
+                                            <p><small>\${op.qtde_produzida.toFixed(2)}/\${op.qtde_carregado.toFixed(2)} \${op.unidade_medida}</small></p>
+                                        </div>
+                                    \`;
+                                    opList.appendChild(opItem);
+                                });
+                                
+                                setTimeout(() => {
+                                    window.print();
+                                    setTimeout(() => window.close(), 500);
+                                }, 1000);
+                            });
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        async function startOP(opId) {
+            if (confirm('Iniciar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/start_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function pauseOP(opId) {
+            if (confirm('Pausar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/pause_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function resumeOP(opId) {
+            if (confirm('Retomar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/resume_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function deleteOP(opId) {
+            if (confirm('Tem certeza que deseja excluir esta OP?\nEsta ação não pode ser desfeita!')) {
+                try {
+                    const response = await fetch(`/api/admin/delete_op/${opId}`, { method: 'DELETE' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        function filterOPs() {
+            const filter = document.getElementById('filter-status').value;
+            const cards = document.querySelectorAll('.op-card-admin');
+            
+            cards.forEach(card => {
+                if (!filter || card.dataset.status === filter) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+        
+        function searchOPs() {
+            const search = document.getElementById('search-op').value.toLowerCase();
+            const cards = document.querySelectorAll('.op-card-admin');
+            
+            cards.forEach(card => {
+                const text = card.textContent.toLowerCase();
+                if (text.includes(search)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+
+<!-- admin_setup.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Inicial</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-tools"></i>
+                <h1>CONFIGURAÇÃO INICIAL</h1>
+            </div>
+            <p class="subtitle">Configure rapidamente o sistema para uso</p>
+        </div>
+        
+        <div class="setup-steps">
+            <div class="step active">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-users"></i> Verificar Usuários</h3>
+                    <p>Confira se todos os usuários padrão estão criados:</p>
+                    <ul class="user-list">
+                        <li><strong>OPERADOR001</strong> - João Silva (Operador)</li>
+                        <li><strong>OPERADOR002</strong> - Maria Santos (Operador)</li>
+                        <li><strong>SUPERVISOR001</strong> - Carlos Oliveira (Supervisor)</li>
+                        <li><strong>ADMIN001</strong> - Admin Sistema (Administrador)</li>
+                    </ul>
+                    <a href="/admin/usuarios" class="btn btn-primary">
+                        <i class="fas fa-user-cog"></i> Gerenciar Usuários
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-industry"></i> Verificar Máquinas</h3>
+                    <p>Confira se as máquinas padrão estão cadastradas:</p>
+                    <ul class="machine-list">
+                        <li><strong>JIGGER01</strong> - Jigger 1 (Tingimento)</li>
+                        <li><strong>JIGGER02</strong> - Jigger 2 (Tingimento)</li>
+                        <li><strong>TURBO01</strong> - Turbo 1 (Tingimento)</li>
+                        <li><strong>STORK01</strong> - Stork 1 (Estampagem)</li>
+                    </ul>
+                    <a href="/admin/maquinas" class="btn btn-primary">
+                        <i class="fas fa-cogs"></i> Gerenciar Máquinas
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-box"></i> Verificar OPs</h3>
+                    <p>Confira se as ordens de produção padrão estão cadastradas:</p>
+                    <ul class="op-list">
+                        <li><strong>OP 193</strong> - 3000m carregados (1500m produzidos)</li>
+                        <li><strong>OP 222</strong> - 2500m carregados (0m produzidos)</li>
+                        <li><strong>OP 245</strong> - 3800m carregados (3800m produzidos)</li>
+                    </ul>
+                    <a href="/admin/ops" class="btn btn-primary">
+                        <i class="fas fa-boxes"></i> Gerenciar OPs
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-exclamation-triangle"></i> Verificar Motivos de Parada</h3>
+                    <p>Confira se os motivos de parada padrão estão cadastrados:</p>
+                    <div class="motivos-grid-small">
+                        <span class="motivo-tag vermelho">Falta de energia</span>
+                        <span class="motivo-tag vermelho">Falta de gás</span>
+                        <span class="motivo-tag laranja">Manutenção corretiva</span>
+                        <span class="motivo-tag amarelo">Manutenção preventiva</span>
+                        <span class="motivo-tag azul">Aguardando qualidade</span>
+                        <span class="motivo-tag roxo">Falta de matéria-prima</span>
+                        <span class="motivo-tag cinza">Outros</span>
+                    </div>
+                    <a href="/admin/motivos_parada" class="btn btn-primary">
+                        <i class="fas fa-list-alt"></i> Gerenciar Motivos
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">5</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-play-circle"></i> Testar o Sistema</h3>
+                    <p>Execute um teste completo do fluxo de apontamento:</p>
+                    <ol class="test-steps">
+                        <li>Faça login como operador (OPERADOR001)</li>
+                        <li>Escaneie uma máquina (JIGGER01)</li>
+                        <li>Selecione uma OP (OP 193)</li>
+                        <li>Registre uma produção</li>
+                        <li>Teste o registro de parada</li>
+                    </ol>
+                    <a href="/scanner" class="btn btn-success">
+                        <i class="fas fa-play"></i> Iniciar Teste
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <div class="quick-access">
+            <h3><i class="fas fa-bolt"></i> Acesso Rápido</h3>
+            <div class="quick-buttons">
+                <a href="/admin/dashboard" class="btn btn-primary">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard Admin
+                </a>
+                <a href="/scanner" class="btn btn-secondary">
+                    <i class="fas fa-qrcode"></i> Testar Scanner
+                </a>
+                <a href="/admin/usuarios?action=print_all" class="btn btn-outline">
+                    <i class="fas fa-print"></i> Imprimir Todos QR Codes
+                </a>
+            </div>
+        </div>
+        
+        <div class="system-info">
+            <h3><i class="fas fa-info-circle"></i> Informações do Sistema</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h4>Banco de Dados</h4>
+                        <p>SQLite - Dados armazenados localmente</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-qrcode"></i>
+                    <div>
+                        <h4>Sistema de QR Codes</h4>
+                        <p>Leitura via câmera ou digitação manual</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-mobile-alt"></i>
+                    <div>
+                        <h4>Interface Mobile</h4>
+                        <p>Otimizado para uso em celulares</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-chart-line"></i>
+                    <div>
+                        <h4>Relatórios</h4>
+                        <p>KPIs e estatísticas em tempo real</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Ativar passos conforme scroll
+        const steps = document.querySelectorAll('.step');
+        
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                }
+            });
+        }, { threshold: 0.5 });
+        
+        steps.forEach(step => observer.observe(step));
+    </script>
+</body>
+</html>
+
+<!-- admin_usuarios.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Usuários</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-users"></i>
+                <h1>GERENCIAR USUÁRIOS</h1>
+            </div>
+            <p class="subtitle">Cadastre e gerencie todos os colaboradores do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link active">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddUsuarioModal()" class="btn btn-primary">
+                <i class="fas fa-user-plus"></i> Adicionar Novo Usuário
+            </button>
+            
+            <div class="filters">
+                <select id="filter-tipo" onchange="filterUsuarios()">
+                    <option value="">Todos os tipos</option>
+                    <option value="operador">Operadores</option>
+                    <option value="supervisor">Supervisores</option>
+                    <option value="admin">Administradores</option>
+                </select>
+                
+                <select id="filter-ativo" onchange="filterUsuarios()">
+                    <option value="">Todos os status</option>
+                    <option value="ativo">Ativos</option>
+                    <option value="inativo">Inativos</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table id="usuarios-table">
+                <thead>
+                    <tr>
+                        <th>QR Code</th>
+                        <th>Nome</th>
+                        <th>Tipo</th>
+                        <th>Setor</th>
+                        <th>Status</th>
+                        <th>Cadastro</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in usuarios_com_qr %}
+                    <tr data-tipo="{{ item.usuario.tipo }}" data-ativo="{{ item.usuario.ativo }}">
+                        <td>
+                            <div class="qr-small">
+                                <img src="{{ item.qr_code }}" alt="QR Code" width="50">
+                                <small>{{ item.usuario.codigo_qr }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <strong>{{ item.usuario.nome }}</strong>
+                            <br>
+                            <small>ID: {{ item.usuario.id }}</small>
+                        </td>
+                        <td>
+                            <span class="tipo-badge {{ item.usuario.tipo }}">
+                                {% if item.usuario.tipo == 'operador' %}
+                                    <i class="fas fa-user-cog"></i>
+                                {% elif item.usuario.tipo == 'supervisor' %}
+                                    <i class="fas fa-user-tie"></i>
+                                {% elif item.usuario.tipo == 'admin' %}
+                                    <i class="fas fa-user-shield"></i>
+                                {% endif %}
+                                {{ item.usuario.tipo|upper }}
+                            </span>
+                        </td>
+                        <td>{{ item.usuario.setor or 'Não definido' }}</td>
+                        <td>
+                            {% if item.usuario.ativo %}
+                            <span class="status-badge active">
+                                <i class="fas fa-check-circle"></i> ATIVO
+                            </span>
+                            {% else %}
+                            <span class="status-badge inactive">
+                                <i class="fas fa-times-circle"></i> INATIVO
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.usuario.data_cadastro.strftime('%d/%m/%Y') }}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button onclick="editUsuario({{ item.usuario.id }})" class="btn-icon" title="Editar">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button onclick="toggleUsuarioStatus({{ item.usuario.id }}, {{ item.usuario.ativo }})" 
+                                        class="btn-icon" title="{{ 'Desativar' if item.usuario.ativo else 'Ativar' }}">
+                                    {% if item.usuario.ativo %}
+                                    <i class="fas fa-user-slash"></i>
+                                    {% else %}
+                                    <i class="fas fa-user-check"></i>
+                                    {% endif %}
+                                </button>
+                                <button onclick="printUsuarioQR({{ item.usuario.id }}, '{{ item.usuario.codigo_qr }}')" 
+                                        class="btn-icon" title="Imprimir QR Code">
+                                    <i class="fas fa-print"></i>
+                                </button>
+                                <button onclick="viewUsuarioStats({{ item.usuario.id }})" class="btn-icon" title="Estatísticas">
+                                    <i class="fas fa-chart-bar"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Usuários</h4>
+                <p class="summary-number">{{ usuarios_com_qr|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Operadores</h4>
+                {% set operadores = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'operador')|list|length %}
+                <p class="summary-number">{{ operadores }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Supervisores</h4>
+                {% set supervisores = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'supervisor')|list|length %}
+                <p class="summary-number">{{ supervisores }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Administradores</h4>
+                {% set admins = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'admin')|list|length %}
+                <p class="summary-number">{{ admins }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar usuário -->
+    <div id="usuarioModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-usuario-title"><i class="fas fa-user-plus"></i> Novo Usuário</h3>
+                <button onclick="hideUsuarioModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="usuarioForm">
+                    <input type="hidden" id="usuario_id" name="usuario_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo_qr">Código QR *</label>
+                            <input type="text" id="codigo_qr" name="codigo_qr" required 
+                                   placeholder="Ex: OPERADOR001" oninput="generateUsuarioQRPreview()">
+                            <small>Este código será usado para escanear o crachá do colaborador</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="nome">Nome Completo *</label>
+                            <input type="text" id="nome" name="nome" required 
+                                   placeholder="Ex: João da Silva">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo">Tipo de Usuário *</label>
+                            <select id="tipo" name="tipo" required>
+                                <option value="">Selecione o tipo...</option>
+                                <option value="operador">Operador</option>
+                                <option value="supervisor">Supervisor</option>
+                                <option value="admin">Administrador</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="setor">Setor</label>
+                            <select id="setor" name="setor">
+                                <option value="">Não especificado</option>
+                                <option value="preparacao">Preparação</option>
+                                <option value="tingimento">Tingimento</option>
+                                <option value="estampagem">Estampagem</option>
+                                <option value="acabamento">Acabamento</option>
+                                <option value="controle_qualidade">Controle de Qualidade</option>
+                                <option value="expedicao">Expedição</option>
+                                <option value="manutencao">Manutenção</option>
+                                <option value="administrativo">Administrativo</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ativo" name="ativo" checked>
+                            Usuário Ativo
+                        </label>
+                    </div>
+                    
+                    <div class="qr-preview" id="usuario-qr-preview">
+                        <h4>Pré-visualização do QR Code do Crachá:</h4>
+                        <div id="usuario-qr-preview-image" class="qr-preview-placeholder">
+                            <i class="fas fa-id-card"></i>
+                            <p>Digite o código QR para gerar a pré-visualização</p>
+                        </div>
+                        <p class="qr-info">Este QR Code será impresso no crachá do colaborador</p>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveUsuario()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Usuário
+                </button>
+                <button onclick="hideUsuarioModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddUsuarioModal() {
+            document.getElementById('modal-usuario-title').innerHTML = '<i class="fas fa-user-plus"></i> Novo Usuário';
+            document.getElementById('usuarioForm').reset();
+            document.getElementById('usuario_id').value = '';
+            document.getElementById('ativo').checked = true;
+            document.getElementById('usuario-qr-preview-image').innerHTML = `
+                <i class="fas fa-id-card"></i>
+                <p>Digite o código QR para gerar a pré-visualização</p>
+            `;
+            document.getElementById('usuarioModal').classList.add('show');
+        }
+        
+        function hideUsuarioModal() {
+            document.getElementById('usuarioModal').classList.remove('show');
+        }
+        
+        async function generateUsuarioQRPreview() {
+            const qrCode = document.getElementById('codigo_qr').value;
+            if (qrCode) {
+                try {
+                    const response = await fetch(`/api/generate_qr?text=${encodeURIComponent(qrCode)}`);
+                    const qrData = await response.json();
+                    
+                    document.getElementById('usuario-qr-preview-image').innerHTML = `
+                        <img src="${qrData.qr_code}" alt="QR Code Preview" style="max-width: 150px;">
+                        <p>${qrCode}</p>
+                    `;
+                } catch (error) {
+                    console.error('Erro ao gerar QR Code:', error);
+                }
+            }
+        }
+        
+        async function saveUsuario() {
+            const form = document.getElementById('usuarioForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo_qr: formData.get('codigo_qr'),
+                nome: formData.get('nome'),
+                tipo: formData.get('tipo'),
+                setor: formData.get('setor') || '',
+                ativo: formData.get('ativo') === 'on'
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_usuario', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideUsuarioModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editUsuario(usuarioId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function toggleUsuarioStatus(usuarioId, isActive) {
+            const action = isActive ? 'desativar' : 'ativar';
+            const confirmMessage = `Tem certeza que deseja ${action} este usuário?`;
+            
+            if (confirm(confirmMessage)) {
+                // Implementar mudança de status
+                alert(`Usuário ${action}do com sucesso!`);
+                location.reload();
+            }
+        }
+        
+        function printUsuarioQR(usuarioId, qrCode) {
+            const printWindow = window.open('', '_blank');
+            
+            // Buscar nome do usuário
+            const usuarioRow = document.querySelector(`tr[data-usuario-id="${usuarioId}"]`);
+            const nome = usuarioRow ? usuarioRow.querySelector('td:nth-child(2) strong').textContent : 'Usuário';
+            
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Crachá - ${nome}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                        .badge-container { 
+                            border: 2px solid #333; 
+                            border-radius: 10px; 
+                            padding: 20px; 
+                            max-width: 300px; 
+                            margin: 0 auto;
+                            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                        }
+                        .company-header { 
+                            background: #2c3e50; 
+                            color: white; 
+                            padding: 10px; 
+                            border-radius: 5px; 
+                            margin-bottom: 20px;
+                        }
+                        .user-photo { 
+                            width: 100px; 
+                            height: 100px; 
+                            background: #f0f0f0; 
+                            border-radius: 50%; 
+                            margin: 10px auto; 
+                            display: flex; 
+                            align-items: center; 
+                            justify-content: center;
+                            font-size: 48px;
+                        }
+                        .qr-container { margin: 20px auto; }
+                        .user-info { margin: 20px 0; }
+                        .footer { 
+                            margin-top: 20px; 
+                            font-size: 12px; 
+                            color: #666; 
+                            border-top: 1px solid #ddd; 
+                            padding-top: 10px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="badge-container">
+                        <div class="company-header">
+                            <h2>LEAN PRODUCTION</h2>
+                            <p>Sistema de Apontamento</p>
+                        </div>
+                        
+                        <div class="user-photo">
+                            <i class="fas fa-user"></i>
+                        </div>
+                        
+                        <div class="user-info">
+                            <h3>${nome}</h3>
+                            <p>Código: ${qrCode}</p>
+                            <p>ID: ${usuarioId}</p>
+                        </div>
+                        
+                        <div class="qr-container">
+                            <img src="${generateQRCodeImage(qrCode)}" alt="QR Code" width="150">
+                            <p><small>Escaneie este código para acessar o sistema</small></p>
+                        </div>
+                        
+                        <div class="footer">
+                            <p>Crachá válido apenas para uso interno</p>
+                            <p>Gerado em: ${new Date().toLocaleDateString()}</p>
+                        </div>
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        function viewUsuarioStats(usuarioId) {
+            window.location.href = `/admin/usuario/${usuarioId}/stats`;
+        }
+        
+        function filterUsuarios() {
+            const tipoFilter = document.getElementById('filter-tipo').value;
+            const ativoFilter = document.getElementById('filter-ativo').value;
+            const rows = document.querySelectorAll('#usuarios-table tbody tr');
+            
+            rows.forEach(row => {
+                const tipo = row.dataset.tipo;
+                const ativo = row.dataset.ativo;
+                let show = true;
+                
+                if (tipoFilter && tipo !== tipoFilter) show = false;
+                if (ativoFilter) {
+                    if (ativoFilter === 'ativo' && ativo !== 'True') show = false;
+                    if (ativoFilter === 'inativo' && ativo !== 'False') show = false;
+                }
+                
+                row.style.display = show ? '' : 'none';
+            });
+        }
+        
+        function generateQRCodeImage(text) {
+            return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(text)}`;
+        }
+    </script>
+</body>
+</html>
+
+# <!-- index.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lean Production Pointer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">
+                <i class="fas fa-industry"></i>
+                <h1>LEAN PRODUCTION POINTER</h1>
+            </div>
+            <p class="subtitle">Sistema de Apontamento de Produção Têxtil</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="welcome-card">
+                <h2><i class="fas fa-hand-wave"></i> Bem-vindo ao Sistema</h2>
+                <p>Escaneie seu crachá para iniciar o apontamento de produção</p>
+                
+                <div class="qr-example">
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-id-card"></i></div>
+                        <p>1. Escaneie o QR Code do seu crachá</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-cogs"></i></div>
+                        <p>2. Escaneie o QR Code da máquina</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-box"></i></div>
+                        <p>3. Selecione a OP (Ordem de Produção)</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-check-circle"></i></div>
+                        <p>4. Registre a produção realizada</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="action-buttons">
+                <a href="/scanner" class="btn btn-primary btn-large">
+                    <i class="fas fa-qrcode"></i> INICIAR APONTAMENTO
+                </a>
+                
+                <div class="secondary-actions">
+                    <a href="/admin/dashboard" class="btn btn-secondary">
+                        <i class="fas fa-chart-line"></i> PAINEL ADMIN
+                    </a>
+                    
+                    <a href="/admin/setup" class="btn btn-outline">
+                        <i class="fas fa-cog"></i> CONFIGURAÇÃO
+                    </a>
+                </div>
+            </div>
+            
+            <div class="system-info">
+                <div class="info-card">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h3>Sistema Online</h3>
+                        <p>Banco de dados conectado</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-mobile-alt"></i>
+                    <div>
+                        <h3>Mobile First</h3>
+                        <p>Otimizado para celulares</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-bolt"></i>
+                    <div>
+                        <h3>Tempo Real</h3>
+                        <p>Atualização instantânea</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+<!-- production.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apontamento de Produção</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container production-container">
+        <div class="header">
+            <a href="/selecionar_op" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-cogs"></i> APONTAMENTO DE PRODUÇÃO</h1>
+        </div>
+        
+        <div class="machine-info-card">
+            <div class="machine-header">
+                <div class="machine-icon">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div>
+                    <h2>{{ maquina.nome }}</h2>
+                    <p class="machine-code">{{ maquina.codigo }} • {{ maquina.setor|upper }}</p>
+                    <div class="status-badge working">
+                        <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="op-info-card">
+            <div class="op-header">
+                <h3><i class="fas fa-box"></i> OP {{ op.op }}</h3>
+                <span class="op-status">{{ op.status_op|upper }}</span>
+            </div>
+            
+            <div class="op-details">
+                <div class="detail-item">
+                    <span class="detail-label">Produto:</span>
+                    <span class="detail-value">{{ op.produto }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Descrição:</span>
+                    <span class="detail-value">{{ op.narrativa }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Grupo:</span>
+                    <span class="detail-value">{{ op.grupo }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Estágio:</span>
+                    <span class="detail-value">{{ op.estagio_atual }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="production-form-card">
+            <h3><i class="fas fa-edit"></i> REGISTRAR PRODUÇÃO</h3>
+            
+            <div class="form-group">
+                <label for="metros-carregados">
+                    <i class="fas fa-ruler"></i> Metros Carregados na OP:
+                </label>
+                <input type="number" id="metros-carregados" value="{{ op.qtde_carregado }}" readonly>
+            </div>
+            
+            <div class="form-group">
+                <label for="metros-produzidos">
+                    <i class="fas fa-check-circle"></i> Metros Já Produzidos:
+                </label>
+                <input type="number" id="metros-produzidos" value="{{ op.qtde_produzida }}" readonly>
+            </div>
+            
+            <div class="form-group">
+                <label for="metros-processados">
+                    <i class="fas fa-bolt"></i> Metros Processados Agora:
+                </label>
+                <div class="input-with-controls">
+                    <input type="number" id="metros-processados" 
+                           value="{{ metros_disponiveis }}" 
+                           min="0" 
+                           max="{{ metros_disponiveis }}"
+                           step="0.01">
+                    
+                    <div class="quick-controls">
+                        <button type="button" onclick="adjustMetros(-100)" class="btn-quick">
+                            -100
+                        </button>
+                        <button type="button" onclick="adjustMetros(-10)" class="btn-quick">
+                            -10
+                        </button>
+                        <span id="current-value">{{ metros_disponiveis }}</span>
+                        <button type="button" onclick="adjustMetros(10)" class="btn-quick">
+                            +10
+                        </button>
+                        <button type="button" onclick="adjustMetros(100)" class="btn-quick">
+                            +100
+                        </button>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progress-text">100% disponível</span>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="observacao">
+                    <i class="fas fa-comment"></i> Observações:
+                </label>
+                <textarea id="observacao" placeholder="Observações sobre qualidade, problemas, etc..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button onclick="registrarProducao()" class="btn btn-success btn-large">
+                    <i class="fas fa-check-circle"></i> CONFIRMAR PRODUÇÃO
+                </button>
+                
+                <div class="secondary-actions">
+                    <button onclick="showParadaModal()" class="btn btn-warning">
+                        <i class="fas fa-exclamation-triangle"></i> REGISTRAR PARADA
+                    </button>
+                    
+                    <button onclick="window.location.href='/'" class="btn btn-secondary">
+                        <i class="fas fa-times"></i> CANCELAR
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="operator-info">
+            <p><i class="fas fa-user"></i> Operador: {{ usuario.nome }}</p>
+            <p><i class="fas fa-clock"></i> Hora: <span id="current-time"></span></p>
+        </div>
+    </div>
+    
+    <!-- Modal de Parada -->
+    <div id="paradaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle"></i> REGISTRAR PARADA</h3>
+                <button onclick="hideParadaModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="motivo-parada">Motivo da Parada:</label>
+                    <select id="motivo-parada" onchange="toggleMotivoPersonalizado()">
+                        <option value="">Selecione um motivo...</option>
+                        <!-- Será preenchido via JavaScript -->
+                    </select>
+                </div>
+                
+                <div id="motivo-personalizado-container" class="hidden">
+                    <div class="form-group">
+                        <label for="motivo-personalizado">Descreva o motivo:</label>
+                        <input type="text" id="motivo-personalizado" placeholder="Descreva o motivo da parada...">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="justificativa-parada">Justificativa (opcional):</label>
+                    <textarea id="justificativa-parada" placeholder="Detalhes adicionais sobre a parada..."></textarea>
+                </div>
+                
+                <div class="timer-display">
+                    <div class="timer">
+                        <i class="fas fa-stopwatch"></i>
+                        <span id="parada-timer">00:00</span>
+                    </div>
+                    <p class="timer-note">A parada será registrada imediatamente</p>
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="registrarParada()" class="btn btn-danger">
+                    <i class="fas fa-stop-circle"></i> CONFIRMAR PARADA
+                </button>
+                <button onclick="hideParadaModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> CANCELAR
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let metrosDisponiveis = {{ metros_disponiveis }};
+        
+        function adjustMetros(change) {
+            const input = document.getElementById('metros-processados');
+            let currentValue = parseFloat(input.value) || 0;
+            let newValue = currentValue + change;
+            
+            // Limitar entre 0 e metrosDisponiveis
+            newValue = Math.max(0, Math.min(metrosDisponiveis, newValue));
+            
+            input.value = newValue;
+            updateProgress();
+        }
+        
+        function updateProgress() {
+            const input = document.getElementById('metros-processados');
+            const currentValue = parseFloat(input.value) || 0;
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            
+            const percentage = (currentValue / metrosDisponiveis) * 100;
+            progressFill.style.width = `${percentage}%`;
+            
+            const metrosRestantes = metrosDisponiveis - currentValue;
+            progressText.textContent = `${metrosRestantes.toFixed(2)}m restantes (${percentage.toFixed(1)}% utilizado)`;
+        }
+        
+        async function registrarProducao() {
+            const metrosProcessados = document.getElementById('metros-processados').value;
+            const observacao = document.getElementById('observacao').value;
+            
+            if (!metrosProcessados || parseFloat(metrosProcessados) <= 0) {
+                alert('Informe a quantidade de metros processados!');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/registrar_apontamento', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        metros_processados: parseFloat(metrosProcessados),
+                        observacao: observacao
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    if (result.redirect) {
+                        window.location.href = result.redirect;
+                    }
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao registrar produção: ' + error.message);
+            }
+        }
+        
+        function showParadaModal() {
+            loadMotivosParada();
+            document.getElementById('paradaModal').classList.add('show');
+        }
+        
+        function hideParadaModal() {
+            document.getElementById('paradaModal').classList.remove('show');
+        }
+        
+        async function loadMotivosParada() {
+            try {
+                const response = await fetch('/api/get_motivos_parada');
+                const motivos = await response.json();
+                
+                const select = document.getElementById('motivo-parada');
+                select.innerHTML = '<option value="">Selecione um motivo...</option>';
+                
+                motivos.forEach(motivo => {
+                    const option = document.createElement('option');
+                    option.value = motivo.id;
+                    option.textContent = `${motivo.codigo} - ${motivo.descricao}`;
+                    option.dataset.codigo = motivo.codigo;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Erro ao carregar motivos:', error);
+            }
+        }
+        
+        function toggleMotivoPersonalizado() {
+            const select = document.getElementById('motivo-parada');
+            const selectedOption = select.options[select.selectedIndex];
+            const container = document.getElementById('motivo-personalizado-container');
+            
+            if (selectedOption.dataset.codigo === 'OUT001') {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        }
+        
+        async function registrarParada() {
+            const motivoSelect = document.getElementById('motivo-parada');
+            const motivoId = motivoSelect.value;
+            const motivoPersonalizado = document.getElementById('motivo-personalizado').value;
+            const justificativa = document.getElementById('justificativa-parada').value;
+            
+            if (!motivoId) {
+                alert('Selecione um motivo para a parada!');
+                return;
+            }
+            
+            const data = {
+                motivo_id: motivoId,
+                justificativa: justificativa
+            };
+            
+            if (motivoPersonalizado) {
+                data.motivo_personalizado = motivoPersonalizado;
+            }
+            
+            try {
+                const response = await fetch('/api/registrar_parada', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('⚠️ ' + result.message);
+                    if (result.redirect) {
+                        window.location.href = result.redirect;
+                    }
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao registrar parada: ' + error.message);
+            }
+        }
+        
+        // Atualizar tempo atual
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('pt-BR', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('current-time').textContent = timeString;
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            
+            // Atualizar progresso quando o valor mudar
+            const input = document.getElementById('metros-processados');
+            input.addEventListener('input', updateProgress);
+            
+            // Inicializar progresso
+            updateProgress();
+        });
+    </script>
+</body>
+</html>
+
+
+<!-- scanner_maquina.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner de Máquina</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+    <div class="container scanner-container">
+        <div class="header">
+            <a href="/scanner" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-industry"></i> ESCANEIE A MÁQUINA</h1>
+        </div>
+        
+        <div class="user-info">
+            <p><i class="fas fa-user"></i> Operador: {{ session.get('usuario_nome', 'Não identificado') }}</p>
+        </div>
+        
+        <div class="scanner-instructions">
+            <p><i class="fas fa-info-circle"></i> Aproxime o QR Code da máquina da câmera</p>
+            <p class="instruction-note">Ou digite o código manualmente abaixo</p>
+        </div>
+        
+        <div id="qr-reader" class="qr-reader-container"></div>
+        
+        <div id="qr-reader-results" class="scanner-results">
+            <div class="status-message" id="status-message">
+                <i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...
+            </div>
+        </div>
+        
+        <div class="manual-input-section">
+            <h3><i class="fas fa-keyboard"></i> Digite o código da máquina:</h3>
+            <div class="input-group">
+                <input type="text" id="manual-code" placeholder="Ex: JIGGER01, TURBO01">
+                <button onclick="validateManualCode()" class="btn btn-primary">
+                    <i class="fas fa-check"></i> Validar
+                </button>
+            </div>
+        </div>
+        
+        <div class="machine-examples">
+            <h3><i class="fas fa-lightbulb"></i> Máquinas Disponíveis:</h3>
+            <div class="machine-codes-grid">
+                <div class="machine-code-item" onclick="fillCode('JIGGER01')">
+                    <i class="fas fa-industry"></i>
+                    <span>JIGGER01</span>
+                    <small>Jigger 1</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('JIGGER02')">
+                    <i class="fas fa-industry"></i>
+                    <span>JIGGER02</span>
+                    <small>Jigger 2</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('TURBO01')">
+                    <i class="fas fa-industry"></i>
+                    <span>TURBO01</span>
+                    <small>Turbo 1</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('STORK01')">
+                    <i class="fas fa-industry"></i>
+                    <span>STORK01</span>
+                    <small>Stork 1</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="scanner-help">
+            <h4><i class="fas fa-question-circle"></i> Como funciona:</h4>
+            <ol>
+                <li>Escaneie o QR Code colado na máquina</li>
+                <li>O sistema identificará automaticamente a máquina</li>
+                <li>Se a máquina estiver em produção, continue a OP</li>
+                <li>Se estiver parada, selecione uma OP para iniciar</li>
+            </ol>
+        </div>
+    </div>
+    
+    <script>
+        let html5QrcodeScanner = null;
+        
+        function onScanSuccess(decodedText, decodedResult) {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.pause();
+            }
+            
+            const statusElement = document.getElementById('status-message');
+            statusElement.innerHTML = `<i class="fas fa-check-circle"></i> QR Code lido! Validando máquina...`;
+            statusElement.style.color = '#28a745';
+            
+            validateQRCode(decodedText);
+        }
+        
+        function onScanFailure(error) {
+            console.log(`Erro de scanner: ${error}`);
+        }
+        
+        function initScanner() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear();
+            }
+            
+            html5QrcodeScanner = new Html5QrcodeScanner(
+                "qr-reader",
+                { 
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 },
+                    rememberLastUsedCamera: true,
+                    showTorchButtonIfSupported: true
+                },
+                false
+            );
+            
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+        
+        async function validateQRCode(qrCode) {
+            try {
+                const response = await fetch('/api/validate_qr', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ qr_code: qrCode })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    const statusElement = document.getElementById('status-message');
+                    statusElement.innerHTML = `<i class="fas fa-check-circle"></i> Máquina identificada! Redirecionando...`;
+                    statusElement.style.color = '#28a745';
+                    
+                    setTimeout(() => {
+                        window.location.href = result.redirect;
+                    }, 1500);
+                } else {
+                    const statusElement = document.getElementById('status-message');
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                    
+                    setTimeout(() => {
+                        statusElement.innerHTML = `<i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...`;
+                        statusElement.style.color = '';
+                        if (html5QrcodeScanner) {
+                            html5QrcodeScanner.resume();
+                        }
+                    }, 3000);
+                }
+            } catch (error) {
+                const statusElement = document.getElementById('status-message');
+                statusElement.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Erro de conexão`;
+                statusElement.style.color = '#dc3545';
+                
+                setTimeout(() => {
+                    statusElement.innerHTML = `<i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...`;
+                    statusElement.style.color = '';
+                    if (html5QrcodeScanner) {
+                        html5QrcodeScanner.resume();
+                    }
+                }, 3000);
+            }
+        }
+        
+        function validateManualCode() {
+            const manualCode = document.getElementById('manual-code').value.trim();
+            
+            if (!manualCode) {
+                alert('Digite o código da máquina!');
+                return;
+            }
+            
+            const statusElement = document.getElementById('status-message');
+            statusElement.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Validando código da máquina...`;
+            
+            validateQRCode(manualCode);
+        }
+        
+        function fillCode(code) {
+            document.getElementById('manual-code').value = code;
+        }
+        
+        // Inicializar quando a página carregar
+        document.addEventListener('DOMContentLoaded', function() {
+            initScanner();
+            
+            // Adicionar listener para input manual
+            const manualInput = document.getElementById('manual-code');
+            if (manualInput) {
+                manualInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        validateManualCode();
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+<!-- scanner.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner de QR Code</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+    <div class="container scanner-container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-qrcode"></i> ESCANEIE SEU CRACHÁ</h1>
+        </div>
+        
+        <div class="scanner-instructions">
+            <p><i class="fas fa-info-circle"></i> Aproxime o QR Code do seu crachá da câmera</p>
+        </div>
+        
+        <div id="qr-reader" class="qr-reader-container"></div>
+        
+        <div id="qr-reader-results" class="scanner-results">
+            <div class="status-message" id="status-message">
+                <i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code...
+            </div>
+        </div>
+        
+        <div class="scanner-options">
+            <button onclick="switchCamera()" class="btn btn-outline">
+                <i class="fas fa-sync-alt"></i> Alternar Câmera
+            </button>
+            
+            <div class="manual-input">
+                <h3><i class="fas fa-keyboard"></i> Ou digite o código manualmente:</h3>
+                <div class="input-group">
+                    <input type="text" id="manual-code" placeholder="Ex: OPERADOR001">
+                    <button onclick="validateManualCode()" class="btn btn-primary">
+                        <i class="fas fa-check"></i> Validar
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="qr-examples">
+            <h3><i class="fas fa-lightbulb"></i> Códigos de exemplo:</h3>
+            <div class="example-codes">
+                <span class="code-tag">OPERADOR001</span>
+                <span class="code-tag">OPERADOR002</span>
+                <span class="code-tag">SUPERVISOR001</span>
+                <span class="code-tag">ADMIN001</span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/scanner.js') }}"></script>
+</body>
+</html>
+
+<!-- selecionar_op.html -->
+
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Selecionar OP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/scanner_maquina" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-box"></i> SELECIONAR OP</h1>
+        </div>
+        
+        <div class="machine-header-card">
+            <div class="machine-header-content">
+                <div class="machine-icon-large">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div>
+                    <h2>{{ maquina.nome }}</h2>
+                    <p class="machine-details">{{ maquina.codigo }} • {{ maquina.setor|upper }}</p>
+                    <div class="status-badge {{ maquina.status }}">
+                        {% if maquina.status == 'trabalhando' %}
+                            <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                        {% elif maquina.status == 'parada' %}
+                            <i class="fas fa-stop-circle"></i> PARADA
+                        {% else %}
+                            <i class="fas fa-wrench"></i> {{ maquina.status|upper }}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <p class="machine-instruction">Selecione uma OP para iniciar a produção</p>
+        </div>
+        
+        {% if ops %}
+        <div class="ops-grid">
+            {% for op in ops %}
+            <div class="op-card" onclick="selecionarOP({{ op.id }})">
+                <div class="op-card-header">
+                    <div class="op-number">
+                        <h3>OP {{ op.op }}</h3>
+                        <span class="op-status-badge {{ op.status_op }}">
+                            {{ op.status_op|upper }}
+                        </span>
+                    </div>
+                    
+                    <div class="op-progress">
+                        {% set percent = (op.qtde_produzida / op.qtde_carregado * 100) if op.qtde_carregado > 0 else 0 %}
+                        <div class="progress-info">
+                            <span class="progress-text">{{ percent|round(1) }}%</span>
+                            <span class="progress-details">{{ op.qtde_produzida|round(2) }}m / {{ op.qtde_carregado|round(2) }}m</span>
+                        </div>
+                        <div class="progress-bar-op">
+                            <div class="progress-fill-op" style="width: {{ percent }}%"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="op-card-body">
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-barcode"></i> Produto:</span>
+                        <span class="detail-value">{{ op.produto }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-align-left"></i> Descrição:</span>
+                        <span class="detail-value">{{ op.narrativa[:50] }}{% if op.narrativa|length > 50 %}...{% endif %}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-layer-group"></i> Grupo:</span>
+                        <span class="detail-value">{{ op.grupo }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-map-marker-alt"></i> Estágio:</span>
+                        <span class="detail-value">{{ op.estagio_atual or 'Não definido' }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-ruler"></i> Disponível:</span>
+                        <span class="detail-value highlight">{{ (op.qtde_carregado - op.qtde_produzida)|round(2) }}m</span>
+                    </div>
+                </div>
+                
+                <div class="op-card-footer">
+                    <button onclick="selecionarOP({{ op.id }})" class="btn btn-primary btn-block">
+                        <i class="fas fa-play"></i> INICIAR PRODUÇÃO
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-icon">
+                <i class="fas fa-inbox"></i>
+            </div>
+            <h3>Nenhuma OP Disponível</h3>
+            <p>Todas as ordens de produção estão em andamento ou já foram finalizadas.</p>
+            <div class="empty-actions">
+                <a href="/admin/ops" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Criar Nova OP
+                </a>
+                <a href="/scanner_maquina" class="btn btn-secondary">
+                    <i class="fas fa-redo"></i> Escanear Outra Máquina
+                </a>
+            </div>
+        </div>
+        {% endif %}
+        
+        <div class="quick-info">
+            <div class="info-card">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <h4>Operador Atual</h4>
+                    <p>{{ session.get('usuario_nome', 'Não identificado') }}</p>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <i class="fas fa-clock"></i>
+                <div>
+                    <h4>Hora Atual</h4>
+                    <p id="current-time"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function selecionarOP(opId) {
+            try {
+                const response = await fetch(`/api/selecionar_op/${opId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Mostrar mensagem de sucesso
+                    alert('✅ OP selecionada com sucesso! Iniciando produção...');
+                    window.location.href = result.redirect;
+                } else {
+                    alert('❌ Erro: ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao selecionar OP: ' + error.message);
+            }
+        }
+        
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('pt-BR', { 
+                hour: '2-digit', 
+                minute: '2-digit'
+            });
+            document.getElementById('current-time').textContent = timeString;
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+        });
+    </script>
+</body>
+</html>
+
+# instance 
+# production_pointer.db
+ordens_producao	id,op,produto,narrativa,grupo,qtde_programado,qtde_carregado,qtde_produzida,unidade_medida,estagio_atual,estagio_posicao,status_op,maquina_atual,data_importacao,data_inicio,data_termino,sincronizado_em,origem_api,observacao
+usuarios	id,codigo_qr,nome,tipo,setor,ativo,data_cadastro
+maquinas	id,codigo_qr,codigo,nome,setor,tipo_maquina,status,data_cadastro
+apontamentos	id,usuario_id,maquina_id,op_id,data_hora_inicio,data_hora_fim,metros_processados,observacao,status_apontamento,tipo_apontamento
+motivos_parada	id,codigo,descricao,categoria,cor,requer_justificativa,ativo,ordem_exibicao
+paradas_maquina	id,apontamento_id,maquina_id,usuario_id,motivo_id,motivo_personalizado,data_hora_inicio,data_hora_fim,duracao_minutos,justificativa,categoria
+log_sincronizacao	id,tipo,data_execucao,registros_processados,registros_novos,registros_atualizados,duracao_segundos,status,mensagem,detalhes
+
+# .env
+
+# ===== BANCO DE DADOS =====
+DATABASE_URL=sqlite:///production_pointer.db
+
+# ===== FLASK =====
+SECRET_KEY=lean_production_secret_key_2024
+DEBUG=True
+PORT=5000
+
+# ===== API SYSTÊXTIL =====
+SYSTEXTIL_API_BASE_URL=https://promoda.systextil.com.br/apexbd/erp
+SYSTEXTIL_TOKEN_URL=https://promoda.systextil.com.br/apexbd/erp/oauth/token
+SYSTEXTIL_CLIENT_ID=vM_z3JIQSR7fMml912X4Wg..
+SYSTEXTIL_CLIENT_SECRET=v6CnE7I6vI6JkYn7DOIQ6A..
+
+# retorno atual da API:
+o selct da api é esse:
+SELECT
+    OP,
+    PRODUTO,
+    DEPOSITO_FINAL,
+    EST,
+    ESTAGIO,
+    MAQUINA_OP,
+    MAQUINA_OP_NOME,
+    OPERADOR_INICIO,
+    OPERADOR_TERMINO,
+    PECAS_VINCULADAS,
+    QTDE_PROGRAMADO,
+    QTDE_CARREGADO,
+    QTDE_PRODUZIDA,
+    CALCULO_QUEBRA,
+    QTDE_ROLOS_GERADOS,
+    QUALIDADE_TECIDO,
+    QTDE_METROS_1_QUALIDADE,
+    QTDE_METROS_2_QUALIDADE,
+    COD_CAN,
+    MOTIVO_CANCELAMENTO,
+    OBS,
+    PERIODO,
+    PROCESSO,
+    TPG,
+    UM,
+    NARRATIVA,
+    NIVEL,
+    GRUPO,
+    SUB,
+    ITEM,
+    ESTAGIO_POSICAO
+FROM 
+    pmdvw_posicao_ops2
+
+retorna isso:
+json de retorno:
+
+{
+  "items" :
+  [
+    {
+      "OP" : 193,
+      "PRODUTO" : "2.K1820.TIN.000051",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 26,
+      "ESTAGIO" : "ACABAMENTO RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "23 - NIVALDO DA ROCHA",
+      "OPERADOR_TERMINO" : "23 -NIVALDO DA ROCHA",
+      "PECAS_VINCULADAS" : "13545",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 2888,
+      "CALCULO_QUEBRA" : 112,
+      "QTDE_ROLOS_GERADOS" : 59,
+      "QUALIDADE_TECIDO" : "58/1 | 1/2",
+      "QTDE_METROS_1_QUALIDADE" : 2860,
+      "QTDE_METROS_2_QUALIDADE" : 28,
+      "COD_CAN" : 7,
+      "MOTIVO_CANCELAMENTO" : "CANCELAMENTO BENEFICIAMENTO",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS TINTO AZUL",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "TIN",
+      "ITEM" : "000051",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 222,
+      "PRODUTO" : "2.01000.TER.000CRU",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 10,
+      "ESTAGIO" : "PREPARACAO BENEFICIA",
+      "MAQUINA_OP" : "TING.001.00000",
+      "OPERADOR_INICIO" : "2 - RAFAEL APARECIDO DE ALMEIDA MACHADO",
+      "OPERADOR_TERMINO" : "2 -RAFAEL APARECIDO DE ALMEIDA MACHADO",
+      "PECAS_VINCULADAS" : "9030 | 9031",
+      "QTDE_PROGRAMADO" : 1200,
+      "QTDE_CARREGADO" : 1200,
+      "QTDE_PRODUZIDA" : 2463,
+      "CALCULO_QUEBRA" : -1263,
+      "QTDE_ROLOS_GERADOS" : 13,
+      "QUALIDADE_TECIDO" : "12/1 | 1/2",
+      "QTDE_METROS_1_QUALIDADE" : 2450,
+      "QTDE_METROS_2_QUALIDADE" : 13,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO FORRO 1000 TERMOFIXADO CRU",
+      "NIVEL" : "2",
+      "GRUPO" : "01000",
+      "SUB" : "TER",
+      "ITEM" : "000CRU",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 226,
+      "PRODUTO" : "2.K1820.094.600711",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 28,
+      "ESTAGIO" : "REVISAO",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "11 - ",
+      "OPERADOR_TERMINO" : "11 -",
+      "PECAS_VINCULADAS" : "13546",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 5598,
+      "CALCULO_QUEBRA" : -2598,
+      "QTDE_ROLOS_GERADOS" : 117,
+      "QUALIDADE_TECIDO" : "113/1 | 4/2",
+      "QTDE_METROS_1_QUALIDADE" : 5526,
+      "QTDE_METROS_2_QUALIDADE" : 72,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 6007-11",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "600711",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 227,
+      "PRODUTO" : "2.K1820.094.500018",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 18,
+      "ESTAGIO" : "TINGIMENTO",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "0 - LEONARDO",
+      "OPERADOR_TERMINO" : "0 -LEONARDO",
+      "PECAS_VINCULADAS" : "16563",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 2847,
+      "CALCULO_QUEBRA" : 153,
+      "QTDE_ROLOS_GERADOS" : 60,
+      "QUALIDADE_TECIDO" : "56/1 | 4/2",
+      "QTDE_METROS_1_QUALIDADE" : 2805,
+      "QTDE_METROS_2_QUALIDADE" : 42,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 5000-18",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "500018",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 227,
+      "PRODUTO" : "2.K1820.094.500018",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 24,
+      "ESTAGIO" : "SECAGEM RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "11 - ",
+      "OPERADOR_TERMINO" : "11 -",
+      "PECAS_VINCULADAS" : "16563",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 2847,
+      "CALCULO_QUEBRA" : 153,
+      "QTDE_ROLOS_GERADOS" : 60,
+      "QUALIDADE_TECIDO" : "56/1 | 4/2",
+      "QTDE_METROS_1_QUALIDADE" : 2805,
+      "QTDE_METROS_2_QUALIDADE" : 42,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 5000-18",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "500018",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 236,
+      "PRODUTO" : "2.K1820.094.400823",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 20,
+      "ESTAGIO" : "ESTAMPARIA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "16549 | 16560",
+      "QTDE_PROGRAMADO" : 2502.75,
+      "QTDE_CARREGADO" : 2420,
+      "QTDE_PRODUZIDA" : 3296,
+      "CALCULO_QUEBRA" : -876,
+      "QTDE_ROLOS_GERADOS" : 68,
+      "QUALIDADE_TECIDO" : "68/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3296,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 4008-23",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "400823",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 236,
+      "PRODUTO" : "2.K1820.094.400823",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 26,
+      "ESTAGIO" : "ACABAMENTO RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "16549 | 16560",
+      "QTDE_PROGRAMADO" : 2502.75,
+      "QTDE_CARREGADO" : 2420,
+      "QTDE_PRODUZIDA" : 3296,
+      "CALCULO_QUEBRA" : -876,
+      "QTDE_ROLOS_GERADOS" : 68,
+      "QUALIDADE_TECIDO" : "68/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3296,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 4008-23",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "400823",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 240,
+      "PRODUTO" : "2.K1820.094.500022",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 24,
+      "ESTAGIO" : "SECAGEM RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "23 - NIVALDO DA ROCHA",
+      "OPERADOR_TERMINO" : "23 -NIVALDO DA ROCHA",
+      "PECAS_VINCULADAS" : "13547",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 3429,
+      "CALCULO_QUEBRA" : -429,
+      "QTDE_ROLOS_GERADOS" : 71,
+      "QUALIDADE_TECIDO" : "71/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3429,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 5000-22",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "500022",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 284,
+      "PRODUTO" : "2.K1820.094.400020",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 24,
+      "ESTAGIO" : "SECAGEM RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "16874",
+      "QTDE_PROGRAMADO" : 2009.25,
+      "QTDE_CARREGADO" : 2000,
+      "QTDE_PRODUZIDA" : 3319,
+      "CALCULO_QUEBRA" : -1319,
+      "QTDE_ROLOS_GERADOS" : 71,
+      "QUALIDADE_TECIDO" : "71/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3319,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 4000-20",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "400020",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 286,
+      "PRODUTO" : "2.K1820.094.601007",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 28,
+      "ESTAGIO" : "REVISAO",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "15475 | 15477 | 16548",
+      "QTDE_PROGRAMADO" : 2502.75,
+      "QTDE_CARREGADO" : 2560,
+      "QTDE_PRODUZIDA" : 3057,
+      "CALCULO_QUEBRA" : -497,
+      "QTDE_ROLOS_GERADOS" : 64,
+      "QUALIDADE_TECIDO" : "64/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3057,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 6010-07",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "601007",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 287,
+      "PRODUTO" : "2.K1820.094.500328",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 20,
+      "ESTAGIO" : "ESTAMPARIA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "16873",
+      "QTDE_PROGRAMADO" : 2009.25,
+      "QTDE_CARREGADO" : 2000,
+      "QTDE_PRODUZIDA" : 0,
+      "CALCULO_QUEBRA" : 2000,
+      "QUALIDADE_TECIDO" : "/1 | /2",
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 5003-28",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "500328",
+      "ESTAGIO_POSICAO" : "28-REVISAO"
+    },
+    {
+      "OP" : 304,
+      "PRODUTO" : "2.K1820.094.500018",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 10,
+      "ESTAGIO" : "PREPARACAO BENEFICIA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "2 - RAFAEL APARECIDO DE ALMEIDA MACHADO",
+      "OPERADOR_TERMINO" : "2 -RAFAEL APARECIDO DE ALMEIDA MACHADO",
+      "PECAS_VINCULADAS" : "16564",
+      "QTDE_PROGRAMADO" : 3008,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 0,
+      "CALCULO_QUEBRA" : 3000,
+      "QUALIDADE_TECIDO" : "/1 | /2",
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD PALHA ESTAMPA 5000-18",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "094",
+      "ITEM" : "500018",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 305,
+      "PRODUTO" : "2.K1620.094.500018",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 18,
+      "ESTAGIO" : "TINGIMENTO",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "11 - ",
+      "OPERADOR_TERMINO" : "11 -",
+      "PECAS_VINCULADAS" : "16558",
+      "QTDE_PROGRAMADO" : 3003,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 1170,
+      "CALCULO_QUEBRA" : 1830,
+      "QTDE_ROLOS_GERADOS" : 23,
+      "QUALIDADE_TECIDO" : "23/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 1170,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO ELEGANCE FDO PALHA ESTAMPA 5000-18",
+      "NIVEL" : "2",
+      "GRUPO" : "K1620",
+      "SUB" : "094",
+      "ITEM" : "500018",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 306,
+      "PRODUTO" : "2.11616.TER.000CRU",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 28,
+      "ESTAGIO" : "REVISAO",
+      "MAQUINA_OP" : "TING. .00000",
+      "OPERADOR_INICIO" : "11 - ",
+      "OPERADOR_TERMINO" : "11 -",
+      "PECAS_VINCULADAS" : "15886 | 15887 | 16705 | 16706 | 16707 | 16708",
+      "QTDE_PROGRAMADO" : 3603.6,
+      "QTDE_CARREGADO" : 3060,
+      "QTDE_PRODUZIDA" : 3600,
+      "CALCULO_QUEBRA" : -540,
+      "QTDE_ROLOS_GERADOS" : 18,
+      "QUALIDADE_TECIDO" : "18/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 3600,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO FORRO 11616 TERMOFIXADO CRU",
+      "NIVEL" : "2",
+      "GRUPO" : "11616",
+      "SUB" : "TER",
+      "ITEM" : "000CRU",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 357,
+      "PRODUTO" : "2.T0003.094.601307",
+      "DEPOSITO_FINAL" : "60-TERCEIROS  TEC 1 ° Q PAPELETA",
+      "EST" : 26,
+      "ESTAGIO" : "ACABAMENTO RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "0 - LEONARDO",
+      "OPERADOR_TERMINO" : "0 -LEONARDO",
+      "PECAS_VINCULADAS" : "19337",
+      "QTDE_PROGRAMADO" : 1800,
+      "QTDE_CARREGADO" : 1800,
+      "QTDE_PRODUZIDA" : 1943,
+      "CALCULO_QUEBRA" : -143,
+      "QTDE_ROLOS_GERADOS" : 34,
+      "QUALIDADE_TECIDO" : "34/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 1943,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO PIQUET 2,50 PALHA E ESTAMPA 6013-07",
+      "NIVEL" : "2",
+      "GRUPO" : "T0003",
+      "SUB" : "094",
+      "ITEM" : "601307",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 358,
+      "PRODUTO" : "2.T0003.094.601210",
+      "DEPOSITO_FINAL" : "60-TERCEIROS  TEC 1 ° Q PAPELETA",
+      "EST" : 18,
+      "ESTAGIO" : "TINGIMENTO",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "5 - SIMONI",
+      "OPERADOR_TERMINO" : "5 -SIMONI",
+      "PECAS_VINCULADAS" : "19336",
+      "QTDE_PROGRAMADO" : 1800,
+      "QTDE_CARREGADO" : 1800,
+      "QTDE_PRODUZIDA" : 1538,
+      "CALCULO_QUEBRA" : 262,
+      "QTDE_ROLOS_GERADOS" : 27,
+      "QUALIDADE_TECIDO" : "27/1 | 0/2",
+      "QTDE_METROS_1_QUALIDADE" : 1538,
+      "QTDE_METROS_2_QUALIDADE" : 0,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO PIQUET 2,50 PALHA E ESTAMPA 6012-10",
+      "NIVEL" : "2",
+      "GRUPO" : "T0003",
+      "SUB" : "094",
+      "ITEM" : "601210",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 380,
+      "PRODUTO" : "2.C1420.094.601307",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 26,
+      "ESTAGIO" : "ACABAMENTO RAMA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "1 - ADM",
+      "OPERADOR_TERMINO" : "1 -ADM",
+      "PECAS_VINCULADAS" : "8290 | 8291 | 8292 | 8293 | 8294",
+      "QTDE_PROGRAMADO" : 3021,
+      "QTDE_CARREGADO" : 3012,
+      "QTDE_PRODUZIDA" : 98,
+      "CALCULO_QUEBRA" : 2914,
+      "QTDE_ROLOS_GERADOS" : 5,
+      "QUALIDADE_TECIDO" : "1/1 | 4/2",
+      "QTDE_METROS_1_QUALIDADE" : 49,
+      "QTDE_METROS_2_QUALIDADE" : 49,
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO NATURALE FDO PALHA ESTAMPA 6013-07",
+      "NIVEL" : "2",
+      "GRUPO" : "C1420",
+      "SUB" : "094",
+      "ITEM" : "601307",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },
+    {
+      "OP" : 391,
+      "PRODUTO" : "2.K1820.093.300121",
+      "DEPOSITO_FINAL" : "20-TECIDO 1ª QUALIDADE CASA",
+      "EST" : 29,
+      "ESTAGIO" : "CALANDRA",
+      "MAQUINA_OP" : "TING.001.00001",
+      "MAQUINA_OP_NOME" : "TINGIMENTO.JIGGER 1.JIGGER 1",
+      "OPERADOR_INICIO" : "11 - ",
+      "OPERADOR_TERMINO" : "11 -",
+      "PECAS_VINCULADAS" : "16880 | 16884",
+      "QTDE_PROGRAMADO" : 1010.5,
+      "QTDE_CARREGADO" : 3000,
+      "QTDE_PRODUZIDA" : 0,
+      "CALCULO_QUEBRA" : 3000,
+      "QUALIDADE_TECIDO" : "/1 | /2",
+      "COD_CAN" : 0,
+      "MOTIVO_CANCELAMENTO" : ".",
+      "OBS" : " - ",
+      "PERIODO" : 9999,
+      "PROCESSO" : 0,
+      "TPG" : 0,
+      "UM" : "M",
+      "NARRATIVA" : "TECIDO LENÇOL ELEGANCE 150FIOS FD ALVEJADO ESTAMPA 3001-21",
+      "NIVEL" : "2",
+      "GRUPO" : "K1820",
+      "SUB" : "093",
+      "ITEM" : "300121",
+      "ESTAGIO_POSICAO" : "99-Finalizado"
+    },

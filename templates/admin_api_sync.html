@@ -1,4 +1,6 @@
-<!DOCTYPE html>
+ <!-- admin_api_sync.html -->
+
+ <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
@@ -40,6 +42,7 @@
         </div>
         
         <!-- Status da API -->
+        <!-- admin_api_sync.html - apenas a seção de status da API -->
         <div class="api-status-section">
             <h3><i class="fas fa-plug"></i> Status da Conexão</h3>
             <div class="api-status-grid">
@@ -52,6 +55,7 @@
                         <p class="api-status-text" id="api-status">Testando conexão...</p>
                         <p class="api-config">
                             <small>URL: {{ api_config.base_url }}</small><br>
+                            <small>Token URL: {{ api_config.token_url }}</small><br>
                             <small>Client ID: {{ api_config.client_id }}</small>
                         </p>
                     </div>

@@ -1,3 +1,5 @@
+# appy.py
+
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
@@ -183,11 +185,13 @@ class SystextilAPIClient:
     def _ensure_token_valid(self):
         """Verifica se o token é válido e renova se necessário"""
         if not self.access_token or not self.token_expiry or datetime.utcnow() >= self.token_expiry:
-            self._get_access_token()
+            return self._get_access_token()
+        return True
     
     def get_production_orders(self, ultima_sincronizacao=None):
         """Busca ordens de produção do endpoint api_pcp_ops"""
-        self._ensure_token_valid()
+        if not self._ensure_token_valid():
+            raise Exception("Não foi possível obter token de acesso")
         
         endpoint = f"{self.base_url}/systextil-intg-plm/api_pcp_ops"
         
@@ -209,29 +213,63 @@ class SystextilAPIClient:
                 
                 # Processa os dados conforme estrutura fornecida
                 processed_orders = []
-                for item in data.get('items', []):
+                
+                # Verificar se a resposta tem o formato correto
+                if 'items' not in data:
+                    print(f"Resposta inesperada da API: {data}")
+                    return processed_orders
+                
+                for item in data['items']:
+                    # Extrair máquina do nome da máquina se necessário
+                    maquina_op = item.get('MAQUINA_OP', '')
+                    
+                    # Se MAQUINA_OP estiver vazio, tenta extrair do MAQUINA_OP_NOME
+                    if not maquina_op and 'MAQUINA_OP_NOME' in item:
+                        maquina_nome = item['MAQUINA_OP_NOME']
+                        # Tenta extrair código da máquina do nome
+                        if '.' in maquina_nome:
+                            parts = maquina_nome.split('.')
+                            if len(parts) >= 3:
+                                maquina_op = parts[1]  # Segundo item geralmente é o código
+                    
+                    # Garantir que valores numéricos sejam tratados corretamente
+                    try:
+                        qtde_programado = float(item.get('QTDE_PROGRAMADO', 0))
+                    except (ValueError, TypeError):
+                        qtde_programado = 0
+                    
+                    try:
+                        qtde_carregado = float(item.get('QTDE_CARREGADO', 0))
+                    except (ValueError, TypeError):
+                        qtde_carregado = 0
+                    
+                    try:
+                        qtde_produzida = float(item.get('QTDE_PRODUZIDA', 0))
+                    except (ValueError, TypeError):
+                        qtde_produzida = 0
+                    
                     order = {
-                        'op': item['OP'],
-                        'produto': item['PRODUTO'],
-                        'narrativa': item['NARRATIVA'],
-                        'grupo': item['GRUPO'],
-                        'qtde_programado': item['QTDE_PROGRAMADO'],
-                        'qtde_carregado': item['QTDE_CARREGADO'],
-                        'qtde_produzida': item['QTDE_PRODUZIDA'],
-                        'estagio_atual': item['ESTAGIO'],
-                        'estagio_posicao': item['ESTAGIO_POSICAO'],
-                        'maquina_op': item.get('MAQUINA_OP', ''),
+                        'op': int(item.get('OP', 0)),
+                        'produto': item.get('PRODUTO', ''),
+                        'narrativa': item.get('NARRATIVA', ''),
+                        'grupo': item.get('GRUPO', ''),
+                        'qtde_programado': qtde_programado,
+                        'qtde_carregado': qtde_carregado,
+                        'qtde_produzida': qtde_produzida,
+                        'estagio_atual': item.get('ESTAGIO', ''),
+                        'estagio_posicao': item.get('ESTAGIO_POSICAO', ''),
+                        'maquina_op': maquina_op,
                         'maquina_op_nome': item.get('MAQUINA_OP_NOME', ''),
                         'deposito_final': item.get('DEPOSITO_FINAL', ''),
                         'qualidade_tecido': item.get('QUALIDADE_TECIDO', ''),
-                        'metros_1_qualidade': item.get('QTDE_METROS_1_QUALIDADE', 0),
-                        'metros_2_qualidade': item.get('QTDE_METROS_2_QUALIDADE', 0),
-                        'calculado_quebra': item.get('CALCULO_QUEBRA', 0),
-                        'rolos_gerados': item.get('QTDE_ROLOS_GERADOS', 0),
+                        'metros_1_qualidade': float(item.get('QTDE_METROS_1_QUALIDADE', 0)),
+                        'metros_2_qualidade': float(item.get('QTDE_METROS_2_QUALIDADE', 0)),
+                        'calculado_quebra': float(item.get('CALCULO_QUEBRA', 0)),
+                        'rolos_gerados': int(item.get('QTDE_ROLOS_GERADOS', 0)),
                         'pecas_vinculadas': item.get('PECAS_VINCULADAS', ''),
                         'observacao': item.get('OBS', ''),
-                        'periodo': item.get('PERIODO', 0),
-                        'processo': item.get('PROCESSO', 0),
+                        'periodo': int(item.get('PERIODO', 0)),
+                        'processo': int(item.get('PROCESSO', 0)),
                         'unidade_medida': item.get('UM', 'M'),
                         'nivel': item.get('NIVEL', ''),
                         'subgrupo': item.get('SUB', ''),
@@ -252,12 +290,10 @@ class SystextilAPIClient:
         
         try:
             # Buscar última sincronização bem-sucedida
-            last_sync = db.session.get(LogSincronizacao, 
-                LogSincronizacao.query.filter_by(
-                    tipo='ops', 
-                    status='sucesso'
-                ).order_by(LogSincronizacao.data_execucao.desc()).first()
-            )
+            last_sync = LogSincronizacao.query.filter_by(
+                tipo='ops', 
+                status='sucesso'
+            ).order_by(LogSincronizacao.data_execucao.desc()).first()
             
             ultima_sincronizacao = last_sync.data_execucao if last_sync else None
             
@@ -286,6 +322,15 @@ class SystextilAPIClient:
                             existing.maquina_atual = self._get_maquina_id_by_code(order_data['maquina_op'])
                             existing.sincronizado_em = datetime.utcnow()
                             existing.observacao = order_data['observacao']
+                            existing.unidade_medida = order_data['unidade_medida']
+                            
+                            # Atualizar status baseado na posição do estágio
+                            existing.status_op = self._determine_status(order_data['estagio_posicao'])
+                            
+                            # Se status for finalizada e ainda não tem data de término
+                            if existing.status_op == 'finalizada' and not existing.data_termino:
+                                existing.data_termino = datetime.utcnow()
+                            
                             stats['atualizados'] += 1
                     else:
                         # Cria nova OP
@@ -306,12 +351,19 @@ class SystextilAPIClient:
                             observacao=order_data['observacao'],
                             unidade_medida=order_data['unidade_medida']
                         )
+                        
+                        # Se status for em andamento e ainda não tem data de início
+                        if nova_op.status_op == 'em_andamento' and not nova_op.data_inicio:
+                            nova_op.data_inicio = datetime.utcnow()
+                        
                         db.session.add(nova_op)
                         stats['novos'] += 1
                         
                 except Exception as e:
                     stats['erros'] += 1
                     print(f"Erro processando OP {order_data.get('op', 'N/A')}: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             db.session.commit()
             
@@ -325,7 +377,7 @@ class SystextilAPIClient:
                 registros_atualizados=stats['atualizados'],
                 duracao_segundos=duracao,
                 status='sucesso',
-                mensagem=f"Sincronização realizada com sucesso. {stats['novos']} novos, {stats['atualizados']} atualizados."
+                mensagem=f"Sincronização realizada com sucesso. {stats['novos']} novos, {stats['atualizados']} atualizados. {stats['erros']} erros."
             )
             
             db.session.add(log)
@@ -334,7 +386,7 @@ class SystextilAPIClient:
             return {
                 'success': True,
                 'stats': stats,
-                'message': f"Sincronização concluída: {stats['novos']} novas OPs, {stats['atualizados']} atualizadas"
+                'message': f"Sincronização concluída: {stats['novos']} novas OPs, {stats['atualizados']} atualizadas, {stats['erros']} erros"
             }
             
         except Exception as e:
@@ -346,11 +398,15 @@ class SystextilAPIClient:
                 registros_processados=0,
                 duracao_segundos=duracao,
                 status='erro',
-                mensagem=str(e)
+                mensagem=str(e),
+                detalhes=str(e)
             )
             
-            db.session.add(log)
-            db.session.commit()
+            try:
+                db.session.add(log)
+                db.session.commit()
+            except:
+                pass
             
             return {
                 'success': False,
@@ -359,10 +415,24 @@ class SystextilAPIClient:
     
     def _get_maquina_id_by_code(self, codigo_maquina):
         """Busca ID da máquina pelo código"""
-        if not codigo_maquina:
+        if not codigo_maquina or codigo_maquina.strip() == '':
             return None
         
-        maquina = Maquina.query.filter_by(codigo=codigo_maquina).first()
+        # Tentar encontrar máquina pelo código
+        maquina = Maquina.query.filter_by(codigo=codigo_maquina.strip()).first()
+        
+        # Se não encontrar, tentar pelo código QR
+        if not maquina:
+            maquina = Maquina.query.filter_by(codigo_qr=codigo_maquina.strip()).first()
+        
+        # Se ainda não encontrar, tentar encontrar por parte do código
+        if not maquina and '.' in codigo_maquina:
+            # Extrair parte principal do código (ex: TING.001.00001 -> TING.001)
+            parts = codigo_maquina.split('.')
+            if len(parts) >= 2:
+                partial_code = f"{parts[0]}.{parts[1]}"
+                maquina = Maquina.query.filter(Maquina.codigo.like(f"{partial_code}%")).first()
+        
         if maquina:
             return maquina.id
         
@@ -370,9 +440,14 @@ class SystextilAPIClient:
     
     def _determine_status(self, estagio_posicao):
         """Determina status da OP baseado no estágio"""
-        if estagio_posicao == '99-Finalizado':
+        if not estagio_posicao:
+            return 'pendente'
+        
+        estagio_str = str(estagio_posicao).strip()
+        
+        if '99' in estagio_str or 'Finalizado' in estagio_str or 'finalizado' in estagio_str:
             return 'finalizada'
-        elif estagio_posicao and estagio_posicao != '99-Finalizado':
+        elif estagio_str and estagio_str != '99-Finalizado':
             return 'em_andamento'
         return 'pendente'
 
@@ -400,6 +475,7 @@ def generate_qr_code(text):
 def init_database():
     """Inicializa o banco de dados com dados de exemplo"""
     with app.app_context():
+        # Criar tabelas se não existirem
         db.create_all()
         
         # Verificar se já existem dados
@@ -415,7 +491,7 @@ def init_database():
             for usuario in usuarios:
                 db.session.add(usuario)
             
-            # Criar máquinas de exemplo
+            # Criar máquinas de exemplo - atualizando com códigos que aparecem na API
             maquinas = [
                 Maquina(codigo_qr='JIGGER01', codigo='TING.001.00001', nome='Jigger 1', setor='tingimento', tipo_maquina='jigger'),
                 Maquina(codigo_qr='JIGGER02', codigo='TING.001.00002', nome='Jigger 2', setor='tingimento', tipo_maquina='jigger'),
@@ -425,49 +501,6 @@ def init_database():
             
             for maquina in maquinas:
                 db.session.add(maquina)
-            
-            # Criar ordens de produção de exemplo
-            ops = [
-                OrdemProducao(
-                    op=193,
-                    produto='2.K1820.TIN.000051',
-                    narrativa='TECIDO LENÇOL ELEGANCE 150FIOS TINTO AZUL',
-                    grupo='K1820',
-                    qtde_programado=3200,
-                    qtde_carregado=3000,
-                    qtde_produzida=1500,
-                    estagio_atual='ACABAMENTO RAMA',
-                    estagio_posicao='45',
-                    status_op='em_andamento'
-                ),
-                OrdemProducao(
-                    op=222,
-                    produto='2.K1820.TIN.000052',
-                    narrativa='TECIDO LENÇOL ELEGANCE 150FIOS BRANCO',
-                    grupo='K1820',
-                    qtde_programado=2800,
-                    qtde_carregado=2500,
-                    qtde_produzida=0,
-                    estagio_atual='PREPARAÇÃO',
-                    estagio_posicao='10',
-                    status_op='pendente'
-                ),
-                OrdemProducao(
-                    op=245,
-                    produto='2.K1825.TIN.000067',
-                    narrativa='TECIDO LENÇOL PREMIUM 200FIOS CINZA',
-                    grupo='K1825',
-                    qtde_programado=4000,
-                    qtde_carregado=3800,
-                    qtde_produzida=3800,
-                    estagio_atual='FINALIZADO',
-                    estagio_posicao='99',
-                    status_op='finalizada'
-                ),
-            ]
-            
-            for op in ops:
-                db.session.add(op)
             
             # Criar motivos de parada
             motivos = [
@@ -901,7 +934,10 @@ def admin_api_sync():
     # Configurações da API
     api_config = {
         'base_url': os.getenv('SYSTEXTIL_API_BASE_URL', 'Não configurado'),
-        'client_id': os.getenv('SYSTEXTIL_CLIENT_ID', 'Não configurado')[:10] + '...' if os.getenv('SYSTEXTIL_CLIENT_ID') else 'Não configurado'
+        'token_url': os.getenv('SYSTEXTIL_TOKEN_URL', 'Não configurado'),
+        'client_id': os.getenv('SYSTEXTIL_CLIENT_ID', 'Não configurado')[:10] + '...' if os.getenv('SYSTEXTIL_CLIENT_ID') else 'Não configurado',
+        'raw_client_id': os.getenv('SYSTEXTIL_CLIENT_ID', ''),
+        'raw_client_secret': os.getenv('SYSTEXTIL_CLIENT_SECRET', '')
     }
     
     return render_template('admin_api_sync.html',
@@ -1246,7 +1282,7 @@ def admin_add_usuario():
         db.session.add(novo_usuario)
         db.session.commit()
         
-        return jsonify({'success': True, 'message': 'Usuário adicionado com sucesso!'})
+        return jsonify({'success': True, 'message': 'Usuário adicionada com sucesso!'})
         
     except Exception as e:
         db.session.rollback()
@@ -1333,13 +1369,19 @@ def test_api_connection():
     
     try:
         client = SystextilAPIClient()
-        client._get_access_token()
+        token_result = client._get_access_token()
         
-        return jsonify({
-            'success': True,
-            'message': 'Conexão com API estabelecida com sucesso!',
-            'token_expiry': client.token_expiry.isoformat() if client.token_expiry else None
-        })
+        if token_result:
+            return jsonify({
+                'success': True,
+                'message': 'Conexão com API estabelecida com sucesso!',
+                'token_expiry': client.token_expiry.isoformat() if client.token_expiry else None
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Não foi possível obter token de acesso'
+            })
         
     except Exception as e:
         return jsonify({
@@ -1366,7 +1408,8 @@ def get_sync_logs():
             'registros_atualizados': log.registros_atualizados,
             'duracao_segundos': log.duracao_segundos,
             'status': log.status,
-            'mensagem': log.mensagem
+            'mensagem': log.mensagem,
+            'detalhes': log.detalhes
         })
     
     return jsonify(logs_list)
