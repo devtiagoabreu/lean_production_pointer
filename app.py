@@ -9,6 +9,11 @@ import base64
 import requests
 import json
 from flask_migrate import Migrate
+import warnings
+from sqlalchemy.exc import SAWarning
+
+# Silenciar warnings do SQLAlchemy
+warnings.filterwarnings('ignore', category=SAWarning)
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -20,6 +25,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+
 # ========== MODELOS DE BANCO DE DADOS ==========
 
 class Usuario(db.Model):
@@ -69,8 +75,8 @@ class OrdemProducao(db.Model):
     observacao = db.Column(db.Text)
     origem_api = db.Column(db.Boolean, default=False)
     
-    # Relacionamentos
-    apontamentos = db.relationship('Apontamento', backref='op_rel', lazy=True)
+    # Relacionamentos corrigidos
+    apontamentos = db.relationship('Apontamento', backref='op_rel', lazy=True, overlaps="apontamentos_rel")
 
 class Apontamento(db.Model):
     __tablename__ = 'apontamentos'
@@ -85,10 +91,10 @@ class Apontamento(db.Model):
     status_apontamento = db.Column(db.String(20), default='em_andamento')
     tipo_apontamento = db.Column(db.String(20), default='producao')
     
-    # Relacionamentos
+    # Relacionamentos corrigidos
     usuario = db.relationship('Usuario', backref='apontamentos')
     maquina = db.relationship('Maquina', backref='apontamentos')
-    op = db.relationship('OrdemProducao', backref='apontamentos_rel')
+    op = db.relationship('OrdemProducao', backref='apontamentos_rel', lazy=True, overlaps="apontamentos,op_rel")
 
 class MotivoParada(db.Model):
     __tablename__ = 'motivos_parada'
@@ -246,10 +252,12 @@ class SystextilAPIClient:
         
         try:
             # Buscar última sincronização bem-sucedida
-            last_sync = LogSincronizacao.query.filter_by(
-                tipo='ops', 
-                status='sucesso'
-            ).order_by(LogSincronizacao.data_execucao.desc()).first()
+            last_sync = db.session.get(LogSincronizacao, 
+                LogSincronizacao.query.filter_by(
+                    tipo='ops', 
+                    status='sucesso'
+                ).order_by(LogSincronizacao.data_execucao.desc()).first()
+            )
             
             ultima_sincronizacao = last_sync.data_execucao if last_sync else None
             
@@ -504,7 +512,7 @@ def selecionar_op():
     if 'maquina_id' not in session:
         return redirect('/')
     
-    maquina = Maquina.query.get(session['maquina_id'])
+    maquina = db.session.get(Maquina, session['maquina_id'])
     ops = OrdemProducao.query.filter(
         OrdemProducao.status_op.in_(['pendente', 'pausado']),
         OrdemProducao.qtde_produzida < OrdemProducao.qtde_carregado
@@ -518,9 +526,9 @@ def production():
     if 'usuario_id' not in session or 'maquina_id' not in session or 'op_id' not in session:
         return redirect('/')
     
-    usuario = Usuario.query.get(session['usuario_id'])
-    maquina = Maquina.query.get(session['maquina_id'])
-    op = OrdemProducao.query.get(session['op_id'])
+    usuario = db.session.get(Usuario, session['usuario_id'])
+    maquina = db.session.get(Maquina, session['maquina_id'])
+    op = db.session.get(OrdemProducao, session['op_id'])
     
     if not usuario or not maquina or not op:
         return redirect('/')
@@ -615,7 +623,7 @@ def selecionar_op_api(op_id):
     if 'maquina_id' not in session:
         return jsonify({'success': False, 'message': 'Sessão inválida'})
     
-    op = OrdemProducao.query.get(op_id)
+    op = db.session.get(OrdemProducao, op_id)
     if not op:
         return jsonify({'success': False, 'message': 'OP não encontrada'})
     
@@ -624,7 +632,7 @@ def selecionar_op_api(op_id):
     if not op.data_inicio:
         op.data_inicio = datetime.utcnow()
     
-    maquina = Maquina.query.get(session['maquina_id'])
+    maquina = db.session.get(Maquina, session['maquina_id'])
     maquina.status = 'trabalhando'
     
     session['op_id'] = op.id
@@ -662,14 +670,14 @@ def registrar_apontamento():
         
         db.session.add(apontamento)
         
-        op = OrdemProducao.query.get(session['op_id'])
+        op = db.session.get(OrdemProducao, session['op_id'])
         op.qtde_produzida += float(data['metros_processados'])
         
         if op.qtde_produzida >= op.qtde_carregado:
             op.status_op = 'finalizada'
             op.data_termino = datetime.utcnow()
             
-            maquina = Maquina.query.get(session['maquina_id'])
+            maquina = db.session.get(Maquina, session['maquina_id'])
             maquina.status = 'parada'
             
             session.pop('maquina_id', None)
@@ -728,11 +736,11 @@ def registrar_parada():
         
         db.session.add(parada)
         
-        maquina = Maquina.query.get(session['maquina_id'])
+        maquina = db.session.get(Maquina, session['maquina_id'])
         maquina.status = 'parada'
         
         if 'op_id' in session:
-            op = OrdemProducao.query.get(session['op_id'])
+            op = db.session.get(OrdemProducao, session['op_id'])
             if op and op.status_op == 'em_andamento':
                 op.status_op = 'pausado'
         
@@ -949,7 +957,7 @@ def update_op(op_id):
     try:
         data = request.json
         
-        op = OrdemProducao.query.get(op_id)
+        op = db.session.get(OrdemProducao, op_id)
         if not op:
             return jsonify({'success': False, 'message': 'OP não encontrada'})
         
@@ -1011,7 +1019,7 @@ def get_op(op_id):
     if session.get('usuario_tipo') != 'admin':
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
-    op = OrdemProducao.query.get(op_id)
+    op = db.session.get(OrdemProducao, op_id)
     if not op:
         return jsonify({'success': False, 'message': 'OP não encontrada'})
     
@@ -1044,13 +1052,13 @@ def get_op_details(op_id):
     if session.get('usuario_tipo') != 'admin':
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
-    op = OrdemProducao.query.get(op_id)
+    op = db.session.get(OrdemProducao, op_id)
     if not op:
         return jsonify({'success': False, 'message': 'OP não encontrada'})
     
     maquina_nome = None
     if op.maquina_atual:
-        maquina = Maquina.query.get(op.maquina_atual)
+        maquina = db.session.get(Maquina, op.maquina_atual)
         if maquina:
             maquina_nome = maquina.nome
     
@@ -1086,7 +1094,7 @@ def start_op(op_id):
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
     try:
-        op = OrdemProducao.query.get(op_id)
+        op = db.session.get(OrdemProducao, op_id)
         if not op:
             return jsonify({'success': False, 'message': 'OP não encontrada'})
         
@@ -1109,7 +1117,7 @@ def pause_op(op_id):
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
     try:
-        op = OrdemProducao.query.get(op_id)
+        op = db.session.get(OrdemProducao, op_id)
         if not op:
             return jsonify({'success': False, 'message': 'OP não encontrada'})
         
@@ -1129,7 +1137,7 @@ def resume_op(op_id):
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
     try:
-        op = OrdemProducao.query.get(op_id)
+        op = db.session.get(OrdemProducao, op_id)
         if not op:
             return jsonify({'success': False, 'message': 'OP não encontrada'})
         
@@ -1149,7 +1157,7 @@ def delete_op(op_id):
         return jsonify({'success': False, 'message': 'Não autorizado'})
     
     try:
-        op = OrdemProducao.query.get(op_id)
+        op = db.session.get(OrdemProducao, op_id)
         if not op:
             return jsonify({'success': False, 'message': 'OP não encontrada'})
         
@@ -1369,7 +1377,7 @@ def print_op(op_id):
     if session.get('usuario_tipo') != 'admin':
         return redirect('/')
     
-    op = OrdemProducao.query.get(op_id)
+    op = db.session.get(OrdemProducao, op_id)
     if not op:
         return "OP não encontrada", 404
     
