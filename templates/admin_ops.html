@@ -371,7 +371,32 @@
     
     <script>
         let currentOpId = null;
-        
+        // Debug helper
+        function debugElement(id) {
+            const element = document.getElementById(id);
+            if (!element) {
+                console.error(`❌ Elemento não encontrado: #${id}`);
+                return null;
+            }
+            console.log(`✅ Elemento encontrado: #${id}`, element);
+            return element;
+        }
+
+        // Testar todos os elementos do modal
+        function testModalElements() {
+            const requiredIds = [
+                'modal-action', 'modal-title', 'op_id', 'op_number', 
+                'produto', 'narrativa', 'grupo', 'qtde_programado',
+                'qtde_carregado', 'qtde_produzida', 'unidade_medida',
+                'estagio_atual', 'estagio_posicao', 'status_op',
+                'maquina_atual', 'observacao'
+            ];
+            
+            console.log('🔍 Testando elementos do modal...');
+            requiredIds.forEach(id => debugElement(id));
+        }
+
+              
         function showAddOPModal() {
             document.getElementById('modal-action').textContent = 'Nova';
             document.getElementById('modal-title').innerHTML = '<i class="fas fa-plus-circle"></i> Nova OP';
@@ -441,20 +466,24 @@
         async function editOP(opId) {
             try {
                 const response = await fetch(`/api/admin/get_op/${opId}`);
-                const op = await response.json();
+                const result = await response.json();
                 
-                if (op) {
+                if (result.success) {
+                    const op = result.op;
+                    
+                    // Atualizar título do modal
                     document.getElementById('modal-action').textContent = 'Editar';
                     document.getElementById('modal-title').innerHTML = `<i class="fas fa-edit"></i> Editar OP ${op.op}`;
                     
+                    // Preencher formulário
                     document.getElementById('op_id').value = op.id;
                     document.getElementById('op_number').value = op.op;
                     document.getElementById('produto').value = op.produto;
                     document.getElementById('narrativa').value = op.narrativa;
                     document.getElementById('grupo').value = op.grupo || '';
-                    document.getElementById('qtde_programado').value = op.qtde_programado;
-                    document.getElementById('qtde_carregado').value = op.qtde_carregado;
-                    document.getElementById('qtde_produzida').value = op.qtde_produzida;
+                    document.getElementById('qtde_programado').value = parseFloat(op.qtde_programado);
+                    document.getElementById('qtde_carregado').value = parseFloat(op.qtde_carregado);
+                    document.getElementById('qtde_produzida').value = parseFloat(op.qtde_produzida);
                     document.getElementById('unidade_medida').value = op.unidade_medida || 'M';
                     document.getElementById('estagio_atual').value = op.estagio_atual || '';
                     document.getElementById('estagio_posicao').value = op.estagio_posicao || '';
@@ -462,10 +491,14 @@
                     document.getElementById('maquina_atual').value = op.maquina_atual || '';
                     document.getElementById('observacao').value = op.observacao || '';
                     
+                    // Mostrar modal
                     document.getElementById('opModal').classList.add('show');
+                } else {
+                    alert('❌ ' + result.message);
                 }
             } catch (error) {
                 alert('❌ Erro ao carregar OP: ' + error.message);
+                console.error('Erro detalhado:', error);
             }
         }
         
@@ -474,13 +507,45 @@
             
             try {
                 const response = await fetch(`/api/admin/get_op_details/${opId}`);
-                const op = await response.json();
+                const result = await response.json();
                 
-                if (op) {
-                    document.getElementById('view-modal-title').innerHTML = `<i class="fas fa-eye"></i> OP ${op.op} - ${op.produto}`;
+                console.log('Resposta da API (detalhes):', result); // Para debug
+                
+                if (result.success && result.op) {
+                    const op = result.op;
                     
-                    const percent = op.qtde_carregado > 0 ? (op.qtde_produzida / op.qtde_carregado * 100).toFixed(1) : 0;
+                    // Atualizar título do modal
+                    document.getElementById('view-modal-title').innerHTML = 
+                        `<i class="fas fa-eye"></i> OP ${op.op} - ${op.produto}`;
                     
+                    // Calcular percentual
+                    const qtdeCarregado = parseFloat(op.qtde_carregado) || 0;
+                    const qtdeProduzida = parseFloat(op.qtde_produzida) || 0;
+                    const percent = qtdeCarregado > 0 ? (qtdeProduzida / qtdeCarregado * 100).toFixed(1) : 0;
+                    
+                    // Formatador de data
+                    function formatDate(dateString) {
+                        if (!dateString) return 'N/A';
+                        try {
+                            const date = new Date(dateString);
+                            return date.toLocaleDateString('pt-BR');
+                        } catch {
+                            return dateString;
+                        }
+                    }
+                    
+                    // Formatador de data/hora
+                    function formatDateTime(dateString) {
+                        if (!dateString) return 'N/A';
+                        try {
+                            const date = new Date(dateString);
+                            return date.toLocaleString('pt-BR');
+                        } catch {
+                            return dateString;
+                        }
+                    }
+                    
+                    // Construir conteúdo HTML
                     const content = `
                         <div class="op-view-container">
                             <div class="op-view-header">
@@ -491,11 +556,11 @@
                                 
                                 <div class="op-view-status">
                                     <span class="status-badge-large ${op.status_op}">
-                                        ${op.status_op.toUpperCase()}
+                                        ${(op.status_op || '').toUpperCase()}
                                     </span>
                                     <p class="op-view-date">
                                         <i class="fas fa-calendar"></i> 
-                                        Criada em: ${new Date(op.data_importacao).toLocaleDateString('pt-BR')}
+                                        Criada em: ${formatDate(op.data_importacao)}
                                     </p>
                                 </div>
                             </div>
@@ -505,11 +570,11 @@
                                 <div class="op-view-grid">
                                     <div class="op-view-item">
                                         <span class="view-label">Produto:</span>
-                                        <span class="view-value">${op.produto}</span>
+                                        <span class="view-value">${op.produto || 'N/A'}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Descrição:</span>
-                                        <span class="view-value">${op.narrativa}</span>
+                                        <span class="view-value">${op.narrativa || 'N/A'}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Grupo:</span>
@@ -517,7 +582,7 @@
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Unidade:</span>
-                                        <span class="view-value">${op.unidade_medida}</span>
+                                        <span class="view-value">${op.unidade_medida || 'M'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -527,19 +592,19 @@
                                 <div class="op-view-grid">
                                     <div class="op-view-item">
                                         <span class="view-label">Programado:</span>
-                                        <span class="view-value">${parseFloat(op.qtde_programado).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span class="view-value">${parseFloat(op.qtde_programado || 0).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Carregado:</span>
-                                        <span class="view-value">${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span class="view-value">${parseFloat(op.qtde_carregado || 0).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Produzido:</span>
-                                        <span class="view-value highlight">${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span class="view-value highlight">${parseFloat(op.qtde_produzida || 0).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Disponível:</span>
-                                        <span class="view-value">${(parseFloat(op.qtde_carregado) - parseFloat(op.qtde_produzida)).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span class="view-value">${(parseFloat(op.qtde_carregado || 0) - parseFloat(op.qtde_produzida || 0)).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                     </div>
                                 </div>
                                 
@@ -552,9 +617,9 @@
                                         <div class="progress-fill-view" style="width: ${percent}%"></div>
                                     </div>
                                     <div class="progress-numbers-view">
-                                        <span>${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span>${parseFloat(op.qtde_produzida || 0).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                         <span>/</span>
-                                        <span>${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span>${parseFloat(op.qtde_carregado || 0).toFixed(2)} ${op.unidade_medida || 'M'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -564,7 +629,7 @@
                                 <div class="op-view-grid">
                                     <div class="op-view-item">
                                         <span class="view-label">Status:</span>
-                                        <span class="view-value status-${op.status_op}">${op.status_op.toUpperCase()}</span>
+                                        <span class="view-value status-${op.status_op}">${(op.status_op || '').toUpperCase()}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Estágio Atual:</span>
@@ -576,7 +641,7 @@
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Máquina Atual:</span>
-                                        <span class="view-value">${op.maquina_atual_nome || 'Nenhuma'}</span>
+                                        <span class="view-value">${op.maquina_atual_nome || op.maquina_atual || 'Nenhuma'}</span>
                                     </div>
                                 </div>
                             </div>
@@ -586,15 +651,15 @@
                                 <div class="op-view-grid">
                                     <div class="op-view-item">
                                         <span class="view-label">Data Início:</span>
-                                        <span class="view-value">${op.data_inicio ? new Date(op.data_inicio).toLocaleDateString('pt-BR') : 'Não iniciada'}</span>
+                                        <span class="view-value">${formatDate(op.data_inicio)}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Data Término:</span>
-                                        <span class="view-value">${op.data_termino ? new Date(op.data_termino).toLocaleDateString('pt-BR') : 'Não finalizada'}</span>
+                                        <span class="view-value">${formatDate(op.data_termino)}</span>
                                     </div>
                                     <div class="op-view-item">
                                         <span class="view-label">Última Atualização:</span>
-                                        <span class="view-value">${new Date(op.sincronizado_em || op.data_importacao).toLocaleString('pt-BR')}</span>
+                                        <span class="view-value">${formatDateTime(op.sincronizado_em || op.data_importacao)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -612,8 +677,11 @@
                     
                     document.getElementById('view-op-content').innerHTML = content;
                     document.getElementById('viewModal').classList.add('show');
+                } else {
+                    throw new Error(result.message || 'OP não encontrada');
                 }
             } catch (error) {
+                console.error('Erro detalhado:', error);
                 alert('❌ Erro ao carregar detalhes da OP: ' + error.message);
             }
         }

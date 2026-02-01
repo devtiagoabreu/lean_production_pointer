@@ -844,6 +844,12 @@ def admin_dashboard():
             'qr_code': qr_data
         })
     
+    # Última sincronização bem-sucedida
+    last_sync = LogSincronizacao.query.filter_by(
+        tipo='ops', 
+        status='sucesso'
+    ).order_by(LogSincronizacao.data_execucao.desc()).first()
+    
     return render_template('admin_dashboard.html',
                          total_ops=total_ops,
                          ops_andamento=ops_andamento,
@@ -853,7 +859,8 @@ def admin_dashboard():
                          producao_hoje=producao_hoje,
                          ultimos_apontamentos=ultimos_apontamentos,
                          maquinas=maquinas,
-                         usuarios_com_qr=usuarios_com_qr)
+                         usuarios_com_qr=usuarios_com_qr,
+                         last_sync=last_sync)
 
 @app.route('/admin/setup')
 def admin_setup():
