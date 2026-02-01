@@ -10,9 +10,15 @@ from io import BytesIO
 import base64
 import requests
 import json
+import ssl
+import sys
 from flask_migrate import Migrate
 import warnings
 from sqlalchemy.exc import SAWarning
+
+# Configuração SSL
+SSL_CERT_PATH = 'ssl_certs/server.crt'
+SSL_KEY_PATH = 'ssl_certs/server.key'
 
 # Silenciar warnings do SQLAlchemy
 warnings.filterwarnings('ignore', category=SAWarning)
@@ -1562,6 +1568,34 @@ def print_op(op_id):
 
 # ========== INICIALIZAÇÃO ==========
 
+# ========== INICIALIZAÇÃO COM SSL ==========
+
+def create_ssl_context():
+    """Cria contexto SSL se os certificados existirem"""
+    if os.path.exists(SSL_CERT_PATH) and os.path.exists(SSL_KEY_PATH):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+        context.load_cert_chain(SSL_CERT_PATH, SSL_KEY_PATH)
+        return context
+    return None
+
 if __name__ == '__main__':
     init_database()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    
+    # Verificar se deve usar SSL
+    use_ssl = '--ssl' in sys.argv
+    ssl_context = None
+    
+    if use_ssl:
+        ssl_context = create_ssl_context()
+        if ssl_context:
+            print("🔒 Servidor rodando com HTTPS")
+        else:
+            print("⚠️  Certificados SSL não encontrados. Rodando sem SSL.")
+            use_ssl = False
+    
+    app.run(
+        debug=True, 
+        host='0.0.0.0', 
+        port=5000,
+        ssl_context=ssl_context
+    )
