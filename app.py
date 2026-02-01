@@ -128,6 +128,14 @@ class LogSincronizacao(db.Model):
     mensagem = db.Column(db.Text)
     detalhes = db.Column(db.Text)
 
+
+# ========== CONTEXT PROCESSOR ==========
+@app.context_processor
+def inject_datetime():
+    """Injeta datetime e now em todos os templates"""
+    return dict(datetime=datetime, now=datetime.utcnow)
+
+
 # ========== CLIENTE API SYSTÊXTIL ==========
 
 class SystextilAPIClient:

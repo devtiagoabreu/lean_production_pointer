@@ -5727,6 +5727,89 @@ FROM ordens_producao ORDER BY ordens_producao.op DESC]
 
 Traceback (most recent call last)
 
+
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+self.dialect.do_execute(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+cursor.execute(statement, parameters)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+The above exception was the direct cause of the following exception:
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2213, in __call__
+return self.wsgi_app(environ, start_response)
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2193, in wsgi_app
+response = self.handle_exception(e)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2190, in wsgi_app
+response = self.full_dispatch_request()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1486, in full_dispatch_request
+rv = self.handle_user_exception(e)
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1484, in full_dispatch_request
+rv = self.dispatch_request()
+     ^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1469, in dispatch_request
+return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\app.py", line 814, in admin_ops_page
+ops = OrdemProducao.query.order_by(OrdemProducao.op.desc()).all()
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 2704, in all
+return self._iter().all()  # type: ignore
+       ^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 2857, in _iter
+result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                              
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2351, in execute
+return self._execute_internal(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2249, in _execute_internal
+result: Result[Any] = compile_state_cls.orm_execute_statement(
+                      
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\context.py", line 306, in orm_execute_statement
+result = conn.execute(
+         
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1419, in execute
+return meth(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\sql\elements.py", line 527, in _execute_on_connection
+return connection._execute_clauseelement(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1641, in _execute_clauseelement
+ret = self._execute_context(
+      
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+return self._exec_single_context(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+self._handle_dbapi_exception(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 2363, in _handle_dbapi_exception
+raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+self.dialect.do_execute(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+cursor.execute(statement, parameters)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: ordens_producao.observacao
+[SQL: SELECT ordens_producao.id AS ordens_producao_id, ordens_producao.op AS ordens_producao_op, ordens_producao.produto AS ordens_producao_produto, ordens_producao.narrativa AS ordens_producao_narrativa, ordens_producao.grupo AS ordens_producao_grupo, ordens_producao.qtde_programado AS ordens_producao_qtde_programado, ordens_producao.qtde_carregado AS ordens_producao_qtde_carregado, ordens_producao.qtde_produzida AS ordens_producao_qtde_produzida, ordens_producao.unidade_medida AS ordens_producao_unidade_medida, ordens_producao.estagio_atual AS ordens_producao_estagio_atual, ordens_producao.estagio_posicao AS ordens_producao_estagio_posicao, ordens_producao.status_op AS ordens_producao_status_op, ordens_producao.maquina_atual AS ordens_producao_maquina_atual, ordens_producao.data_importacao AS ordens_producao_data_importacao, ordens_producao.data_inicio AS ordens_producao_data_inicio, ordens_producao.data_termino AS ordens_producao_data_termino, ordens_producao.sincronizado_em AS ordens_producao_sincronizado_em, ordens_producao.observacao AS ordens_producao_observacao, ordens_producao.origem_api AS ordens_producao_origem_api
+FROM ordens_producao ORDER BY ordens_producao.op DESC]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+The debugger caught an exception in your WSGI application. You can now look at the traceback which led to the error.
+To switch between the interactive traceback and the plaintext one, you can click on the "Traceback" headline. From the text traceback you can also create a paste of it. For code execution mouse-over the frame you want to debug and click on the console icon on the right side.
+
+You can execute arbitrary Python code in the stack frames and there are some extra helpers available for introspection:
+
+dump() shows all variables in the frame
+dump(obj) dumps all that's known about the object
+
+
+
+
 http://localhost:5000/admin/dashboard 
 OperationalError
 sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: ordens_producao.sincronizado_em
@@ -5736,6 +5819,92 @@ FROM ordens_producao) AS anon_1]
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
 
 
+Traceback (most recent call last)
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+self.dialect.do_execute(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+cursor.execute(statement, parameters)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+The above exception was the direct cause of the following exception:
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2213, in __call__
+return self.wsgi_app(environ, start_response)
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2193, in wsgi_app
+response = self.handle_exception(e)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 2190, in wsgi_app
+response = self.full_dispatch_request()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1486, in full_dispatch_request
+rv = self.handle_user_exception(e)
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1484, in full_dispatch_request
+rv = self.dispatch_request()
+     ^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\flask\app.py", line 1469, in dispatch_request
+return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\app.py", line 762, in admin_dashboard
+total_ops = OrdemProducao.query.count()
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 3146, in count
+self._legacy_from_self(col).enable_eagerloads(False).scalar()
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 2835, in scalar
+ret = self.one()
+      ^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 2808, in one
+return self._iter().one()  # type: ignore
+       ^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\query.py", line 2857, in _iter
+result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+                                              
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2351, in execute
+return self._execute_internal(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2249, in _execute_internal
+result: Result[Any] = compile_state_cls.orm_execute_statement(
+                      
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\orm\context.py", line 306, in orm_execute_statement
+result = conn.execute(
+         
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1419, in execute
+return meth(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\sql\elements.py", line 527, in _execute_on_connection
+return connection._execute_clauseelement(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1641, in _execute_clauseelement
+ret = self._execute_context(
+      
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+return self._exec_single_context(
+       
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+self._handle_dbapi_exception(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 2363, in _handle_dbapi_exception
+raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+self.dialect.do_execute(
+^
+File "E:\dev\lean_production_pointer\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 952, in do_execute
+cursor.execute(statement, parameters)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: ordens_producao.observacao
+[SQL: SELECT count(*) AS count_1
+FROM (SELECT ordens_producao.id AS ordens_producao_id, ordens_producao.op AS ordens_producao_op, ordens_producao.produto AS ordens_producao_produto, ordens_producao.narrativa AS ordens_producao_narrativa, ordens_producao.grupo AS ordens_producao_grupo, ordens_producao.qtde_programado AS ordens_producao_qtde_programado, ordens_producao.qtde_carregado AS ordens_producao_qtde_carregado, ordens_producao.qtde_produzida AS ordens_producao_qtde_produzida, ordens_producao.unidade_medida AS ordens_producao_unidade_medida, ordens_producao.estagio_atual AS ordens_producao_estagio_atual, ordens_producao.estagio_posicao AS ordens_producao_estagio_posicao, ordens_producao.status_op AS ordens_producao_status_op, ordens_producao.maquina_atual AS ordens_producao_maquina_atual, ordens_producao.data_importacao AS ordens_producao_data_importacao, ordens_producao.data_inicio AS ordens_producao_data_inicio, ordens_producao.data_termino AS ordens_producao_data_termino, ordens_producao.sincronizado_em AS ordens_producao_sincronizado_em, ordens_producao.observacao AS ordens_producao_observacao, ordens_producao.origem_api AS ordens_producao_origem_api
+FROM ordens_producao) AS anon_1]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+The debugger caught an exception in your WSGI application. You can now look at the traceback which led to the error.
+To switch between the interactive traceback and the plaintext one, you can click on the "Traceback" headline. From the text traceback you can also create a paste of it. For code execution mouse-over the frame you want to debug and click on the console icon on the right side.
+
+You can execute arbitrary Python code in the stack frames and there are some extra helpers available for introspection:
+
+dump() shows all variables in the frame
+dump(obj) dumps all that's known about the object
 
 
 
