@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner de QR Code</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+    <div class="container scanner-container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-qrcode"></i> ESCANEIE SEU CRACHÁ</h1>
+        </div>
+        
+        <div class="scanner-instructions">
+            <p><i class="fas fa-info-circle"></i> Aproxime o QR Code do seu crachá da câmera</p>
+        </div>
+        
+        <div id="qr-reader" class="qr-reader-container"></div>
+        
+        <div id="qr-reader-results" class="scanner-results">
+            <div class="status-message" id="status-message">
+                <i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code...
+            </div>
+        </div>
+        
+        <div class="scanner-options">
+            <button onclick="switchCamera()" class="btn btn-outline">
+                <i class="fas fa-sync-alt"></i> Alternar Câmera
+            </button>
+            
+            <div class="manual-input">
+                <h3><i class="fas fa-keyboard"></i> Ou digite o código manualmente:</h3>
+                <div class="input-group">
+                    <input type="text" id="manual-code" placeholder="Ex: OPERADOR001">
+                    <button onclick="validateManualCode()" class="btn btn-primary">
+                        <i class="fas fa-check"></i> Validar
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="qr-examples">
+            <h3><i class="fas fa-lightbulb"></i> Códigos de exemplo:</h3>
+            <div class="example-codes">
+                <span class="code-tag">OPERADOR001</span>
+                <span class="code-tag">OPERADOR002</span>
+                <span class="code-tag">SUPERVISOR001</span>
+                <span class="code-tag">ADMIN001</span>
+            </div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/scanner.js') }}"></script>
+</body>
+</html>

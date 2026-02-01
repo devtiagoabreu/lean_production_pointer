@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Selecionar OP</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/scanner_maquina" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-box"></i> SELECIONAR OP</h1>
+        </div>
+        
+        <div class="machine-header-card">
+            <div class="machine-header-content">
+                <div class="machine-icon-large">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div>
+                    <h2>{{ maquina.nome }}</h2>
+                    <p class="machine-details">{{ maquina.codigo }} • {{ maquina.setor|upper }}</p>
+                    <div class="status-badge {{ maquina.status }}">
+                        {% if maquina.status == 'trabalhando' %}
+                            <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                        {% elif maquina.status == 'parada' %}
+                            <i class="fas fa-stop-circle"></i> PARADA
+                        {% else %}
+                            <i class="fas fa-wrench"></i> {{ maquina.status|upper }}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <p class="machine-instruction">Selecione uma OP para iniciar a produção</p>
+        </div>
+        
+        {% if ops %}
+        <div class="ops-grid">
+            {% for op in ops %}
+            <div class="op-card" onclick="selecionarOP({{ op.id }})">
+                <div class="op-card-header">
+                    <div class="op-number">
+                        <h3>OP {{ op.op }}</h3>
+                        <span class="op-status-badge {{ op.status_op }}">
+                            {{ op.status_op|upper }}
+                        </span>
+                    </div>
+                    
+                    <div class="op-progress">
+                        {% set percent = (op.qtde_produzida / op.qtde_carregado * 100) if op.qtde_carregado > 0 else 0 %}
+                        <div class="progress-info">
+                            <span class="progress-text">{{ percent|round(1) }}%</span>
+                            <span class="progress-details">{{ op.qtde_produzida|round(2) }}m / {{ op.qtde_carregado|round(2) }}m</span>
+                        </div>
+                        <div class="progress-bar-op">
+                            <div class="progress-fill-op" style="width: {{ percent }}%"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="op-card-body">
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-barcode"></i> Produto:</span>
+                        <span class="detail-value">{{ op.produto }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-align-left"></i> Descrição:</span>
+                        <span class="detail-value">{{ op.narrativa[:50] }}{% if op.narrativa|length > 50 %}...{% endif %}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-layer-group"></i> Grupo:</span>
+                        <span class="detail-value">{{ op.grupo }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-map-marker-alt"></i> Estágio:</span>
+                        <span class="detail-value">{{ op.estagio_atual or 'Não definido' }}</span>
+                    </div>
+                    
+                    <div class="op-detail">
+                        <span class="detail-label"><i class="fas fa-ruler"></i> Disponível:</span>
+                        <span class="detail-value highlight">{{ (op.qtde_carregado - op.qtde_produzida)|round(2) }}m</span>
+                    </div>
+                </div>
+                
+                <div class="op-card-footer">
+                    <button onclick="selecionarOP({{ op.id }})" class="btn btn-primary btn-block">
+                        <i class="fas fa-play"></i> INICIAR PRODUÇÃO
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-icon">
+                <i class="fas fa-inbox"></i>
+            </div>
+            <h3>Nenhuma OP Disponível</h3>
+            <p>Todas as ordens de produção estão em andamento ou já foram finalizadas.</p>
+            <div class="empty-actions">
+                <a href="/admin/ops" class="btn btn-primary">
+                    <i class="fas fa-plus"></i> Criar Nova OP
+                </a>
+                <a href="/scanner_maquina" class="btn btn-secondary">
+                    <i class="fas fa-redo"></i> Escanear Outra Máquina
+                </a>
+            </div>
+        </div>
+        {% endif %}
+        
+        <div class="quick-info">
+            <div class="info-card">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <h4>Operador Atual</h4>
+                    <p>{{ session.get('usuario_nome', 'Não identificado') }}</p>
+                </div>
+            </div>
+            
+            <div class="info-card">
+                <i class="fas fa-clock"></i>
+                <div>
+                    <h4>Hora Atual</h4>
+                    <p id="current-time"></p>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function selecionarOP(opId) {
+            try {
+                const response = await fetch(`/api/selecionar_op/${opId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Mostrar mensagem de sucesso
+                    alert('✅ OP selecionada com sucesso! Iniciando produção...');
+                    window.location.href = result.redirect;
+                } else {
+                    alert('❌ Erro: ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao selecionar OP: ' + error.message);
+            }
+        }
+        
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('pt-BR', { 
+                hour: '2-digit', 
+                minute: '2-digit'
+            });
+            document.getElementById('current-time').textContent = timeString;
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+        });
+    </script>
+</body>
+</html>

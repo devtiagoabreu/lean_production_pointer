@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Máquinas</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-industry"></i>
+                <h1>GERENCIAR MÁQUINAS</h1>
+            </div>
+            <p class="subtitle">Cadastre e gerencie todas as máquinas do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link active">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddMaquinaModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Nova Máquina
+            </button>
+            
+            <button onclick="printAllQRCodes()" class="btn btn-secondary">
+                <i class="fas fa-print"></i> Imprimir Todos QR Codes
+            </button>
+        </div>
+        
+        <div class="machines-grid">
+            {% for item in maquinas_com_qr %}
+            <div class="machine-card">
+                <div class="machine-header">
+                    <div class="machine-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <div class="machine-info">
+                        <h3>{{ item.maquina.nome }}</h3>
+                        <p class="machine-code">{{ item.maquina.codigo }}</p>
+                        <p class="machine-setor">{{ item.maquina.setor|upper }}</p>
+                    </div>
+                </div>
+                
+                <div class="machine-status">
+                    <span class="status-badge {{ item.maquina.status }}">
+                        {% if item.maquina.status == 'trabalhando' %}
+                            <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                        {% elif item.maquina.status == 'parada' %}
+                            <i class="fas fa-stop-circle"></i> PARADA
+                        {% else %}
+                            <i class="fas fa-wrench"></i> {{ item.maquina.status|upper }}
+                        {% endif %}
+                    </span>
+                </div>
+                
+                <div class="machine-qr">
+                    <img src="{{ item.qr_code }}" alt="QR Code da máquina" class="qr-image">
+                    <p class="qr-code-text">{{ item.maquina.codigo_qr }}</p>
+                </div>
+                
+                <div class="machine-details">
+                    <p><i class="fas fa-cog"></i> Tipo: {{ item.maquina.tipo_maquina or 'Não especificado' }}</p>
+                    <p><i class="fas fa-calendar"></i> Cadastrada em: {{ item.maquina.data_cadastro.strftime('%d/%m/%Y') }}</p>
+                </div>
+                
+                <div class="machine-actions">
+                    <button onclick="editMaquina({{ item.maquina.id }})" class="btn-icon" title="Editar">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button onclick="viewMaquinaHistory({{ item.maquina.id }})" class="btn-icon" title="Histórico">
+                        <i class="fas fa-history"></i>
+                    </button>
+                    <button onclick="printQRCode('{{ item.maquina.codigo_qr }}')" class="btn-icon" title="Imprimir QR Code">
+                        <i class="fas fa-print"></i>
+                    </button>
+                    <button onclick="changeStatus({{ item.maquina.id }})" class="btn-icon" title="Alterar Status">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Máquinas</h4>
+                <p class="summary-number">{{ maquinas_com_qr|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Em Produção</h4>
+                {% set em_producao = maquinas_com_qr|selectattr('maquina.status', 'equalto', 'trabalhando')|list|length %}
+                <p class="summary-number">{{ em_producao }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Paradas</h4>
+                {% set paradas = maquinas_com_qr|selectattr('maquina.status', 'equalto', 'parada')|list|length %}
+                <p class="summary-number">{{ paradas }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Por Setor</h4>
+                <p class="summary-number">Vários</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar máquina -->
+    <div id="maquinaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-maquina-title"><i class="fas fa-plus-circle"></i> Nova Máquina</h3>
+                <button onclick="hideMaquinaModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="maquinaForm">
+                    <input type="hidden" id="maquina_id" name="maquina_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo_qr">Código QR *</label>
+                            <input type="text" id="codigo_qr" name="codigo_qr" required 
+                                   placeholder="Ex: JIGGER01" oninput="generateQRCodePreview()">
+                            <small>Este código será usado para escanear a máquina</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="codigo">Código da Máquina *</label>
+                            <input type="text" id="codigo" name="codigo" required 
+                                   placeholder="Ex: TING.001.00001">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="nome">Nome da Máquina *</label>
+                            <input type="text" id="nome" name="nome" required 
+                                   placeholder="Ex: Jigger 1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="tipo_maquina">Tipo de Máquina</label>
+                            <input type="text" id="tipo_maquina" name="tipo_maquina" 
+                                   placeholder="Ex: jigger, turbo, stork">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="setor">Setor *</label>
+                            <select id="setor" name="setor" required>
+                                <option value="">Selecione um setor...</option>
+                                <option value="preparacao">Preparação</option>
+                                <option value="tingimento">Tingimento</option>
+                                <option value="estampagem">Estampagem</option>
+                                <option value="acabamento">Acabamento</option>
+                                <option value="controle_qualidade">Controle de Qualidade</option>
+                                <option value="expedicao">Expedição</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="status">Status Inicial</label>
+                            <select id="status" name="status">
+                                <option value="parada" selected>Parada</option>
+                                <option value="trabalhando">Trabalhando</option>
+                                <option value="manutencao">Manutenção</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="descricao">Descrição (opcional)</label>
+                        <textarea id="descricao" name="descricao" rows="2" 
+                                  placeholder="Descrição adicional da máquina..."></textarea>
+                    </div>
+                    
+                    <div class="qr-preview" id="qr-preview">
+                        <h4>Pré-visualização do QR Code:</h4>
+                        <div id="qr-preview-image" class="qr-preview-placeholder">
+                            <i class="fas fa-qrcode"></i>
+                            <p>Digite o código QR para gerar a pré-visualização</p>
+                        </div>
+                        <p class="qr-info">Este QR Code será usado para identificar a máquina no sistema</p>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveMaquina()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Máquina
+                </button>
+                <button onclick="hideMaquinaModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddMaquinaModal() {
+            document.getElementById('modal-maquina-title').innerHTML = '<i class="fas fa-plus-circle"></i> Nova Máquina';
+            document.getElementById('maquinaForm').reset();
+            document.getElementById('maquina_id').value = '';
+            document.getElementById('qr-preview-image').innerHTML = `
+                <i class="fas fa-qrcode"></i>
+                <p>Digite o código QR para gerar a pré-visualização</p>
+            `;
+            document.getElementById('maquinaModal').classList.add('show');
+        }
+        
+        function hideMaquinaModal() {
+            document.getElementById('maquinaModal').classList.remove('show');
+        }
+        
+        async function generateQRCodePreview() {
+            const qrCode = document.getElementById('codigo_qr').value;
+            if (qrCode) {
+                try {
+                    const response = await fetch(`/api/generate_qr?text=${encodeURIComponent(qrCode)}`);
+                    const qrData = await response.json();
+                    
+                    document.getElementById('qr-preview-image').innerHTML = `
+                        <img src="${qrData.qr_code}" alt="QR Code Preview" style="max-width: 150px;">
+                        <p>${qrCode}</p>
+                    `;
+                } catch (error) {
+                    console.error('Erro ao gerar QR Code:', error);
+                }
+            }
+        }
+        
+        async function saveMaquina() {
+            const form = document.getElementById('maquinaForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo_qr: formData.get('codigo_qr'),
+                codigo: formData.get('codigo'),
+                nome: formData.get('nome'),
+                setor: formData.get('setor'),
+                tipo_maquina: formData.get('tipo_maquina'),
+                status: formData.get('status'),
+                descricao: formData.get('descricao')
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_maquina', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideMaquinaModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editMaquina(maquinaId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function viewMaquinaHistory(maquinaId) {
+            window.location.href = `/admin/maquina/${maquinaId}/history`;
+        }
+        
+        function printQRCode(qrCode) {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>QR Code - ${qrCode}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                        .qr-container { margin: 20px auto; }
+                        .machine-info { margin-top: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <h2>QR Code para Máquina</h2>
+                    <div class="qr-container">
+                        <img src="${generateQRCodeImage(qrCode)}" alt="QR Code" width="200">
+                    </div>
+                    <div class="machine-info">
+                        <h3>Código: ${qrCode}</h3>
+                        <p>Escaneie este código para identificar a máquina no sistema</p>
+                        <p><small>Gerado em: ${new Date().toLocaleDateString()}</small></p>
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        function printAllQRCodes() {
+            const printWindow = window.open('', '_blank');
+            let content = `
+                <html>
+                <head>
+                    <title>Todos os QR Codes</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; }
+                        .qr-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+                        .qr-item { text-align: center; border: 1px solid #ddd; padding: 15px; }
+                        @media print {
+                            .qr-grid { grid-template-columns: repeat(4, 1fr); }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>QR Codes das Máquinas</h1>
+                    <div class="qr-grid">
+            `;
+            
+            {% for item in maquinas_com_qr %}
+            content += `
+                <div class="qr-item">
+                    <img src="${item.qr_code}" alt="QR Code" width="120">
+                    <h4>${item.maquina.nome}</h4>
+                    <p>${item.maquina.codigo}</p>
+                    <p><strong>QR: ${item.maquina.codigo_qr}</strong></p>
+                </div>
+            `;
+            {% endfor %}
+            
+            content += `
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `;
+            
+            printWindow.document.write(content);
+            printWindow.document.close();
+        }
+        
+        function changeStatus(maquinaId) {
+            const newStatus = prompt('Novo status (trabalhando/parada/manutencao):');
+            if (newStatus && ['trabalhando', 'parada', 'manutencao'].includes(newStatus)) {
+                // Implementar mudança de status
+                alert(`Status alterado para: ${newStatus}`);
+            }
+        }
+        
+        function generateQRCodeImage(text) {
+            // Esta função seria implementada no backend
+            // Por enquanto, retorna uma imagem de placeholder
+            return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(text)}`;
+        }
+    </script>
+</body>
+</html>

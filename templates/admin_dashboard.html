@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Admin</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-chart-line"></i>
+                <h1>DASHBOARD ADMINISTRATIVO</h1>
+            </div>
+            <p class="subtitle">Bem-vindo, {{ session.get('usuario_nome', 'Administrador') }}</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link active">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+            <a href="/admin/setup" class="nav-link">
+                <i class="fas fa-cog"></i> Setup
+            </a>
+        </div>
+        
+        <!-- Cartões de Estatísticas -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-boxes"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Total de OPs</h3>
+                    <p class="stat-number">{{ total_ops }}</p>
+                    <p class="stat-subtext">{{ ops_andamento }} em andamento</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Máquinas Ativas</h3>
+                    <p class="stat-number">{{ maquinas_ativas }}/{{ total_maquinas }}</p>
+                    <p class="stat-subtext">{{ ((maquinas_ativas/total_maquinas)*100)|round(1) if total_maquinas > 0 else 0 }}% disponibilidade</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-ruler"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>Produção Hoje</h3>
+                    <p class="stat-number">{{ producao_hoje|round(2) }}m</p>
+                    <p class="stat-subtext">{{ (producao_hoje/1000)|round(1) if producao_hoje > 0 else 0 }}km</p>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="stat-content">
+                    <h3>OPs Finalizadas</h3>
+                    <p class="stat-number">{{ ops_finalizadas }}</p>
+                    <p class="stat-subtext">{{ (ops_finalizadas/total_ops*100)|round(1) if total_ops > 0 else 0 }}% do total</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Status das Máquinas -->
+        <div class="section">
+            <h3><i class="fas fa-cogs"></i> Status das Máquinas</h3>
+            <div class="machines-status-grid">
+                {% for maquina in maquinas %}
+                <div class="machine-status-card {{ maquina.status }}">
+                    <div class="machine-status-header">
+                        <div class="machine-icon-small">
+                            <i class="fas fa-industry"></i>
+                        </div>
+                        <div>
+                            <h4>{{ maquina.nome }}</h4>
+                            <p class="machine-code-small">{{ maquina.codigo }}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="machine-status-info">
+                        <span class="status-badge {{ maquina.status }}">
+                            {% if maquina.status == 'trabalhando' %}
+                                <i class="fas fa-play-circle"></i> PRODUZINDO
+                            {% elif maquina.status == 'parada' %}
+                                <i class="fas fa-stop-circle"></i> PARADA
+                            {% else %}
+                                <i class="fas fa-wrench"></i> {{ maquina.status|upper }}
+                            {% endif %}
+                        </span>
+                        
+                        <div class="machine-setor-small">
+                            {{ maquina.setor|upper }}
+                        </div>
+                    </div>
+                    
+                    {% if maquina.status == 'trabalhando' %}
+                    {% set op_atual = maquina.op_atual[0] if maquina.op_atual else None %}
+                    <div class="machine-op-info">
+                        {% if op_atual %}
+                        <p><i class="fas fa-box"></i> OP {{ op_atual.op }}</p>
+                        <p>{{ op_atual.produto[:15] }}...</p>
+                        {% else %}
+                        <p><i class="fas fa-info-circle"></i> Sem OP atribuída</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <!-- Últimos Apontamentos -->
+        <div class="section">
+            <h3><i class="fas fa-history"></i> Últimos Apontamentos</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Hora</th>
+                            <th>Operador</th>
+                            <th>Máquina</th>
+                            <th>OP</th>
+                            <th>Metros</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for apontamento in ultimos_apontamentos %}
+                        <tr>
+                            <td>{{ apontamento.data_hora_inicio.strftime('%H:%M') }}</td>
+                            <td>
+                                {% if apontamento.usuario %}
+                                {{ apontamento.usuario.nome }}
+                                {% else %}
+                                Usuário não encontrado
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if apontamento.maquina %}
+                                {{ apontamento.maquina.nome }}
+                                {% else %}
+                                Máquina não encontrada
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if apontamento.op %}
+                                OP {{ apontamento.op.op }}
+                                {% else %}
+                                OP não encontrada
+                                {% endif %}
+                            </td>
+                            <td>{{ apontamento.metros_processados|round(2) }}m</td>
+                            <td>
+                                <span class="status-badge {{ apontamento.status_apontamento }}">
+                                    {% if apontamento.status_apontamento == 'finalizado' %}
+                                        <i class="fas fa-check-circle"></i>
+                                    {% elif apontamento.status_apontamento == 'em_andamento' %}
+                                        <i class="fas fa-play-circle"></i>
+                                    {% else %}
+                                        <i class="fas fa-pause-circle"></i>
+                                    {% endif %}
+                                    {{ apontamento.status_apontamento|upper }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center">Nenhum apontamento registrado ainda</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Ações Rápidas -->
+        <div class="section">
+            <h3><i class="fas fa-bolt"></i> Ações Rápidas</h3>
+            <div class="quick-actions-grid">
+                <a href="/admin/ops?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar OP</h4>
+                    <p>Criar nova ordem de produção</p>
+                </a>
+                
+                <a href="/admin/maquinas?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar Máquina</h4>
+                    <p>Cadastrar nova máquina</p>
+                </a>
+                
+                <a href="/admin/usuarios?action=add" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-plus-circle"></i>
+                    </div>
+                    <h4>Adicionar Usuário</h4>
+                    <p>Criar novo colaborador</p>
+                </a>
+                
+                <a href="/scanner" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-qrcode"></i>
+                    </div>
+                    <h4>Testar Scanner</h4>
+                    <p>Verificar leitura QR Code</p>
+                </a>
+                
+                <a href="/admin/setup" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <h4>Configuração</h4>
+                    <p>Setup inicial do sistema</p>
+                </a>
+                
+                <button onclick="syncData()" class="quick-action-card">
+                    <div class="quick-action-icon">
+                        <i class="fas fa-sync-alt"></i>
+                    </div>
+                    <h4>Sincronizar</h4>
+                    <p>Atualizar dados do sistema</p>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Informações do Sistema -->
+        <div class="system-info-card">
+            <h3><i class="fas fa-info-circle"></i> Informações do Sistema</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h4>Banco de Dados</h4>
+                        <p>{{ total_ops }} OPs, {{ total_maquinas }} máquinas, {{ usuarios_com_qr|length if usuarios_com_qr else 0 }} usuários</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-calendar-alt"></i>
+                    <div>
+                        <h4>Data/Hora</h4>
+                        <p id="current-datetime">{{ datetime.now().strftime('%d/%m/%Y %H:%M:%S') }}</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-server"></i>
+                    <div>
+                        <h4>Status do Sistema</h4>
+                        <p class="status-online"><i class="fas fa-circle"></i> Online e funcionando</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Atualizar data/hora
+        function updateDateTime() {
+            const now = new Date();
+            const datetime = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR');
+            document.getElementById('current-datetime').textContent = datetime;
+        }
+        
+        // Atualizar a cada segundo
+        setInterval(updateDateTime, 1000);
+        
+        // Sincronizar dados
+        function syncData() {
+            alert('Funcionalidade de sincronização será implementada na próxima versão!');
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateDateTime();
+        });
+    </script>
+</body>
+</html>

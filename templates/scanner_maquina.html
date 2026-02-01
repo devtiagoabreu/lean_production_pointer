@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scanner de Máquina</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+</head>
+<body>
+    <div class="container scanner-container">
+        <div class="header">
+            <a href="/scanner" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-industry"></i> ESCANEIE A MÁQUINA</h1>
+        </div>
+        
+        <div class="user-info">
+            <p><i class="fas fa-user"></i> Operador: {{ session.get('usuario_nome', 'Não identificado') }}</p>
+        </div>
+        
+        <div class="scanner-instructions">
+            <p><i class="fas fa-info-circle"></i> Aproxime o QR Code da máquina da câmera</p>
+            <p class="instruction-note">Ou digite o código manualmente abaixo</p>
+        </div>
+        
+        <div id="qr-reader" class="qr-reader-container"></div>
+        
+        <div id="qr-reader-results" class="scanner-results">
+            <div class="status-message" id="status-message">
+                <i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...
+            </div>
+        </div>
+        
+        <div class="manual-input-section">
+            <h3><i class="fas fa-keyboard"></i> Digite o código da máquina:</h3>
+            <div class="input-group">
+                <input type="text" id="manual-code" placeholder="Ex: JIGGER01, TURBO01">
+                <button onclick="validateManualCode()" class="btn btn-primary">
+                    <i class="fas fa-check"></i> Validar
+                </button>
+            </div>
+        </div>
+        
+        <div class="machine-examples">
+            <h3><i class="fas fa-lightbulb"></i> Máquinas Disponíveis:</h3>
+            <div class="machine-codes-grid">
+                <div class="machine-code-item" onclick="fillCode('JIGGER01')">
+                    <i class="fas fa-industry"></i>
+                    <span>JIGGER01</span>
+                    <small>Jigger 1</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('JIGGER02')">
+                    <i class="fas fa-industry"></i>
+                    <span>JIGGER02</span>
+                    <small>Jigger 2</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('TURBO01')">
+                    <i class="fas fa-industry"></i>
+                    <span>TURBO01</span>
+                    <small>Turbo 1</small>
+                </div>
+                <div class="machine-code-item" onclick="fillCode('STORK01')">
+                    <i class="fas fa-industry"></i>
+                    <span>STORK01</span>
+                    <small>Stork 1</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="scanner-help">
+            <h4><i class="fas fa-question-circle"></i> Como funciona:</h4>
+            <ol>
+                <li>Escaneie o QR Code colado na máquina</li>
+                <li>O sistema identificará automaticamente a máquina</li>
+                <li>Se a máquina estiver em produção, continue a OP</li>
+                <li>Se estiver parada, selecione uma OP para iniciar</li>
+            </ol>
+        </div>
+    </div>
+    
+    <script>
+        let html5QrcodeScanner = null;
+        
+        function onScanSuccess(decodedText, decodedResult) {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.pause();
+            }
+            
+            const statusElement = document.getElementById('status-message');
+            statusElement.innerHTML = `<i class="fas fa-check-circle"></i> QR Code lido! Validando máquina...`;
+            statusElement.style.color = '#28a745';
+            
+            validateQRCode(decodedText);
+        }
+        
+        function onScanFailure(error) {
+            console.log(`Erro de scanner: ${error}`);
+        }
+        
+        function initScanner() {
+            if (html5QrcodeScanner) {
+                html5QrcodeScanner.clear();
+            }
+            
+            html5QrcodeScanner = new Html5QrcodeScanner(
+                "qr-reader",
+                { 
+                    fps: 10,
+                    qrbox: { width: 250, height: 250 },
+                    rememberLastUsedCamera: true,
+                    showTorchButtonIfSupported: true
+                },
+                false
+            );
+            
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+        
+        async function validateQRCode(qrCode) {
+            try {
+                const response = await fetch('/api/validate_qr', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ qr_code: qrCode })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    const statusElement = document.getElementById('status-message');
+                    statusElement.innerHTML = `<i class="fas fa-check-circle"></i> Máquina identificada! Redirecionando...`;
+                    statusElement.style.color = '#28a745';
+                    
+                    setTimeout(() => {
+                        window.location.href = result.redirect;
+                    }, 1500);
+                } else {
+                    const statusElement = document.getElementById('status-message');
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                    
+                    setTimeout(() => {
+                        statusElement.innerHTML = `<i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...`;
+                        statusElement.style.color = '';
+                        if (html5QrcodeScanner) {
+                            html5QrcodeScanner.resume();
+                        }
+                    }, 3000);
+                }
+            } catch (error) {
+                const statusElement = document.getElementById('status-message');
+                statusElement.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Erro de conexão`;
+                statusElement.style.color = '#dc3545';
+                
+                setTimeout(() => {
+                    statusElement.innerHTML = `<i class="fas fa-hourglass-half"></i> Aguardando leitura do QR Code da máquina...`;
+                    statusElement.style.color = '';
+                    if (html5QrcodeScanner) {
+                        html5QrcodeScanner.resume();
+                    }
+                }, 3000);
+            }
+        }
+        
+        function validateManualCode() {
+            const manualCode = document.getElementById('manual-code').value.trim();
+            
+            if (!manualCode) {
+                alert('Digite o código da máquina!');
+                return;
+            }
+            
+            const statusElement = document.getElementById('status-message');
+            statusElement.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Validando código da máquina...`;
+            
+            validateQRCode(manualCode);
+        }
+        
+        function fillCode(code) {
+            document.getElementById('manual-code').value = code;
+        }
+        
+        // Inicializar quando a página carregar
+        document.addEventListener('DOMContentLoaded', function() {
+            initScanner();
+            
+            // Adicionar listener para input manual
+            const manualInput = document.getElementById('manual-code');
+            if (manualInput) {
+                manualInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        validateManualCode();
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>

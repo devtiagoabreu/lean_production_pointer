@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Usuários</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-users"></i>
+                <h1>GERENCIAR USUÁRIOS</h1>
+            </div>
+            <p class="subtitle">Cadastre e gerencie todos os colaboradores do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link active">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddUsuarioModal()" class="btn btn-primary">
+                <i class="fas fa-user-plus"></i> Adicionar Novo Usuário
+            </button>
+            
+            <div class="filters">
+                <select id="filter-tipo" onchange="filterUsuarios()">
+                    <option value="">Todos os tipos</option>
+                    <option value="operador">Operadores</option>
+                    <option value="supervisor">Supervisores</option>
+                    <option value="admin">Administradores</option>
+                </select>
+                
+                <select id="filter-ativo" onchange="filterUsuarios()">
+                    <option value="">Todos os status</option>
+                    <option value="ativo">Ativos</option>
+                    <option value="inativo">Inativos</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="table-container">
+            <table id="usuarios-table">
+                <thead>
+                    <tr>
+                        <th>QR Code</th>
+                        <th>Nome</th>
+                        <th>Tipo</th>
+                        <th>Setor</th>
+                        <th>Status</th>
+                        <th>Cadastro</th>
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in usuarios_com_qr %}
+                    <tr data-tipo="{{ item.usuario.tipo }}" data-ativo="{{ item.usuario.ativo }}">
+                        <td>
+                            <div class="qr-small">
+                                <img src="{{ item.qr_code }}" alt="QR Code" width="50">
+                                <small>{{ item.usuario.codigo_qr }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <strong>{{ item.usuario.nome }}</strong>
+                            <br>
+                            <small>ID: {{ item.usuario.id }}</small>
+                        </td>
+                        <td>
+                            <span class="tipo-badge {{ item.usuario.tipo }}">
+                                {% if item.usuario.tipo == 'operador' %}
+                                    <i class="fas fa-user-cog"></i>
+                                {% elif item.usuario.tipo == 'supervisor' %}
+                                    <i class="fas fa-user-tie"></i>
+                                {% elif item.usuario.tipo == 'admin' %}
+                                    <i class="fas fa-user-shield"></i>
+                                {% endif %}
+                                {{ item.usuario.tipo|upper }}
+                            </span>
+                        </td>
+                        <td>{{ item.usuario.setor or 'Não definido' }}</td>
+                        <td>
+                            {% if item.usuario.ativo %}
+                            <span class="status-badge active">
+                                <i class="fas fa-check-circle"></i> ATIVO
+                            </span>
+                            {% else %}
+                            <span class="status-badge inactive">
+                                <i class="fas fa-times-circle"></i> INATIVO
+                            </span>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.usuario.data_cadastro.strftime('%d/%m/%Y') }}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button onclick="editUsuario({{ item.usuario.id }})" class="btn-icon" title="Editar">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button onclick="toggleUsuarioStatus({{ item.usuario.id }}, {{ item.usuario.ativo }})" 
+                                        class="btn-icon" title="{{ 'Desativar' if item.usuario.ativo else 'Ativar' }}">
+                                    {% if item.usuario.ativo %}
+                                    <i class="fas fa-user-slash"></i>
+                                    {% else %}
+                                    <i class="fas fa-user-check"></i>
+                                    {% endif %}
+                                </button>
+                                <button onclick="printUsuarioQR({{ item.usuario.id }}, '{{ item.usuario.codigo_qr }}')" 
+                                        class="btn-icon" title="Imprimir QR Code">
+                                    <i class="fas fa-print"></i>
+                                </button>
+                                <button onclick="viewUsuarioStats({{ item.usuario.id }})" class="btn-icon" title="Estatísticas">
+                                    <i class="fas fa-chart-bar"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Usuários</h4>
+                <p class="summary-number">{{ usuarios_com_qr|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Operadores</h4>
+                {% set operadores = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'operador')|list|length %}
+                <p class="summary-number">{{ operadores }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Supervisores</h4>
+                {% set supervisores = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'supervisor')|list|length %}
+                <p class="summary-number">{{ supervisores }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Administradores</h4>
+                {% set admins = usuarios_com_qr|selectattr('usuario.tipo', 'equalto', 'admin')|list|length %}
+                <p class="summary-number">{{ admins }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar usuário -->
+    <div id="usuarioModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-usuario-title"><i class="fas fa-user-plus"></i> Novo Usuário</h3>
+                <button onclick="hideUsuarioModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="usuarioForm">
+                    <input type="hidden" id="usuario_id" name="usuario_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo_qr">Código QR *</label>
+                            <input type="text" id="codigo_qr" name="codigo_qr" required 
+                                   placeholder="Ex: OPERADOR001" oninput="generateUsuarioQRPreview()">
+                            <small>Este código será usado para escanear o crachá do colaborador</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="nome">Nome Completo *</label>
+                            <input type="text" id="nome" name="nome" required 
+                                   placeholder="Ex: João da Silva">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="tipo">Tipo de Usuário *</label>
+                            <select id="tipo" name="tipo" required>
+                                <option value="">Selecione o tipo...</option>
+                                <option value="operador">Operador</option>
+                                <option value="supervisor">Supervisor</option>
+                                <option value="admin">Administrador</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="setor">Setor</label>
+                            <select id="setor" name="setor">
+                                <option value="">Não especificado</option>
+                                <option value="preparacao">Preparação</option>
+                                <option value="tingimento">Tingimento</option>
+                                <option value="estampagem">Estampagem</option>
+                                <option value="acabamento">Acabamento</option>
+                                <option value="controle_qualidade">Controle de Qualidade</option>
+                                <option value="expedicao">Expedição</option>
+                                <option value="manutencao">Manutenção</option>
+                                <option value="administrativo">Administrativo</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ativo" name="ativo" checked>
+                            Usuário Ativo
+                        </label>
+                    </div>
+                    
+                    <div class="qr-preview" id="usuario-qr-preview">
+                        <h4>Pré-visualização do QR Code do Crachá:</h4>
+                        <div id="usuario-qr-preview-image" class="qr-preview-placeholder">
+                            <i class="fas fa-id-card"></i>
+                            <p>Digite o código QR para gerar a pré-visualização</p>
+                        </div>
+                        <p class="qr-info">Este QR Code será impresso no crachá do colaborador</p>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveUsuario()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Usuário
+                </button>
+                <button onclick="hideUsuarioModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddUsuarioModal() {
+            document.getElementById('modal-usuario-title').innerHTML = '<i class="fas fa-user-plus"></i> Novo Usuário';
+            document.getElementById('usuarioForm').reset();
+            document.getElementById('usuario_id').value = '';
+            document.getElementById('ativo').checked = true;
+            document.getElementById('usuario-qr-preview-image').innerHTML = `
+                <i class="fas fa-id-card"></i>
+                <p>Digite o código QR para gerar a pré-visualização</p>
+            `;
+            document.getElementById('usuarioModal').classList.add('show');
+        }
+        
+        function hideUsuarioModal() {
+            document.getElementById('usuarioModal').classList.remove('show');
+        }
+        
+        async function generateUsuarioQRPreview() {
+            const qrCode = document.getElementById('codigo_qr').value;
+            if (qrCode) {
+                try {
+                    const response = await fetch(`/api/generate_qr?text=${encodeURIComponent(qrCode)}`);
+                    const qrData = await response.json();
+                    
+                    document.getElementById('usuario-qr-preview-image').innerHTML = `
+                        <img src="${qrData.qr_code}" alt="QR Code Preview" style="max-width: 150px;">
+                        <p>${qrCode}</p>
+                    `;
+                } catch (error) {
+                    console.error('Erro ao gerar QR Code:', error);
+                }
+            }
+        }
+        
+        async function saveUsuario() {
+            const form = document.getElementById('usuarioForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo_qr: formData.get('codigo_qr'),
+                nome: formData.get('nome'),
+                tipo: formData.get('tipo'),
+                setor: formData.get('setor') || '',
+                ativo: formData.get('ativo') === 'on'
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_usuario', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideUsuarioModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editUsuario(usuarioId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function toggleUsuarioStatus(usuarioId, isActive) {
+            const action = isActive ? 'desativar' : 'ativar';
+            const confirmMessage = `Tem certeza que deseja ${action} este usuário?`;
+            
+            if (confirm(confirmMessage)) {
+                // Implementar mudança de status
+                alert(`Usuário ${action}do com sucesso!`);
+                location.reload();
+            }
+        }
+        
+        function printUsuarioQR(usuarioId, qrCode) {
+            const printWindow = window.open('', '_blank');
+            
+            // Buscar nome do usuário
+            const usuarioRow = document.querySelector(`tr[data-usuario-id="${usuarioId}"]`);
+            const nome = usuarioRow ? usuarioRow.querySelector('td:nth-child(2) strong').textContent : 'Usuário';
+            
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Crachá - ${nome}</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+                        .badge-container { 
+                            border: 2px solid #333; 
+                            border-radius: 10px; 
+                            padding: 20px; 
+                            max-width: 300px; 
+                            margin: 0 auto;
+                            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                        }
+                        .company-header { 
+                            background: #2c3e50; 
+                            color: white; 
+                            padding: 10px; 
+                            border-radius: 5px; 
+                            margin-bottom: 20px;
+                        }
+                        .user-photo { 
+                            width: 100px; 
+                            height: 100px; 
+                            background: #f0f0f0; 
+                            border-radius: 50%; 
+                            margin: 10px auto; 
+                            display: flex; 
+                            align-items: center; 
+                            justify-content: center;
+                            font-size: 48px;
+                        }
+                        .qr-container { margin: 20px auto; }
+                        .user-info { margin: 20px 0; }
+                        .footer { 
+                            margin-top: 20px; 
+                            font-size: 12px; 
+                            color: #666; 
+                            border-top: 1px solid #ddd; 
+                            padding-top: 10px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="badge-container">
+                        <div class="company-header">
+                            <h2>LEAN PRODUCTION</h2>
+                            <p>Sistema de Apontamento</p>
+                        </div>
+                        
+                        <div class="user-photo">
+                            <i class="fas fa-user"></i>
+                        </div>
+                        
+                        <div class="user-info">
+                            <h3>${nome}</h3>
+                            <p>Código: ${qrCode}</p>
+                            <p>ID: ${usuarioId}</p>
+                        </div>
+                        
+                        <div class="qr-container">
+                            <img src="${generateQRCodeImage(qrCode)}" alt="QR Code" width="150">
+                            <p><small>Escaneie este código para acessar o sistema</small></p>
+                        </div>
+                        
+                        <div class="footer">
+                            <p>Crachá válido apenas para uso interno</p>
+                            <p>Gerado em: ${new Date().toLocaleDateString()}</p>
+                        </div>
+                    </div>
+                    <script>
+                        window.onload = function() {
+                            window.print();
+                            setTimeout(function() {
+                                window.close();
+                            }, 500);
+                        }
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        function viewUsuarioStats(usuarioId) {
+            window.location.href = `/admin/usuario/${usuarioId}/stats`;
+        }
+        
+        function filterUsuarios() {
+            const tipoFilter = document.getElementById('filter-tipo').value;
+            const ativoFilter = document.getElementById('filter-ativo').value;
+            const rows = document.querySelectorAll('#usuarios-table tbody tr');
+            
+            rows.forEach(row => {
+                const tipo = row.dataset.tipo;
+                const ativo = row.dataset.ativo;
+                let show = true;
+                
+                if (tipoFilter && tipo !== tipoFilter) show = false;
+                if (ativoFilter) {
+                    if (ativoFilter === 'ativo' && ativo !== 'True') show = false;
+                    if (ativoFilter === 'inativo' && ativo !== 'False') show = false;
+                }
+                
+                row.style.display = show ? '' : 'none';
+            });
+        }
+        
+        function generateQRCodeImage(text) {
+            return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(text)}`;
+        }
+    </script>
+</body>
+</html>

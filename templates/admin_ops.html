@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar OPs</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-box"></i>
+                <h1>GERENCIAR ORDENS DE PRODUÇÃO</h1>
+            </div>
+            <p class="subtitle">Adicione, edite e visualize todas as OPs do sistema</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link active">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddOPModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Nova OP
+            </button>
+            
+            <button onclick="printAllOPs()" class="btn btn-secondary">
+                <i class="fas fa-print"></i> Imprimir Todas OPs
+            </button>
+            
+            <div class="filters">
+                <select id="filter-status" onchange="filterOPs()">
+                    <option value="">Todos os status</option>
+                    <option value="pendente">Pendentes</option>
+                    <option value="em_andamento">Em Andamento</option>
+                    <option value="finalizada">Finalizadas</option>
+                    <option value="pausado">Pausadas</option>
+                </select>
+                
+                <input type="text" id="search-op" placeholder="Buscar por OP ou produto..." 
+                       onkeyup="searchOPs()">
+            </div>
+        </div>
+        
+        <div class="ops-grid-admin">
+            {% for op in ops %}
+            <div class="op-card-admin" data-status="{{ op.status_op }}">
+                <div class="op-card-header-admin">
+                    <div class="op-number-large">
+                        <h3>OP {{ op.op }}</h3>
+                        <span class="op-status-badge-admin {{ op.status_op }}">
+                            {% if op.status_op == 'pendente' %}
+                                <i class="fas fa-clock"></i>
+                            {% elif op.status_op == 'em_andamento' %}
+                                <i class="fas fa-play-circle"></i>
+                            {% elif op.status_op == 'finalizada' %}
+                                <i class="fas fa-check-circle"></i>
+                            {% elif op.status_op == 'pausado' %}
+                                <i class="fas fa-pause-circle"></i>
+                            {% endif %}
+                            {{ op.status_op|upper }}
+                        </span>
+                    </div>
+                    
+                    <div class="op-qr-code">
+                        <img src="{{ url_for('generate_op_qr', op_number=op.op) }}" alt="QR Code OP {{ op.op }}" width="80">
+                        <small>OP {{ op.op }}</small>
+                    </div>
+                </div>
+                
+                <div class="op-card-body-admin">
+                    <div class="op-info-row">
+                        <span class="info-label">Produto:</span>
+                        <span class="info-value">{{ op.produto }}</span>
+                    </div>
+                    
+                    <div class="op-info-row">
+                        <span class="info-label">Descrição:</span>
+                        <span class="info-value">{{ op.narrativa[:50] }}{% if op.narrativa|length > 50 %}...{% endif %}</span>
+                    </div>
+                    
+                    <div class="op-info-row">
+                        <span class="info-label">Grupo:</span>
+                        <span class="info-value">{{ op.grupo or 'N/A' }}</span>
+                    </div>
+                    
+                    <div class="op-progress-admin">
+                        <div class="progress-info-admin">
+                            <span>Progresso:</span>
+                            <span>
+                                {% set percent = (op.qtde_produzida / op.qtde_carregado * 100) if op.qtde_carregado > 0 else 0 %}
+                                {{ percent|round(1) }}%
+                            </span>
+                        </div>
+                        <div class="progress-bar-admin">
+                            <div class="progress-fill-admin" style="width: {{ percent }}%"></div>
+                        </div>
+                        <div class="progress-numbers">
+                            <span>{{ op.qtde_produzida|round(2) }}m</span>
+                            <span>/</span>
+                            <span>{{ op.qtde_carregado|round(2) }}m</span>
+                        </div>
+                    </div>
+                    
+                    <div class="op-details-admin">
+                        <div class="detail-item-admin">
+                            <i class="fas fa-industry"></i>
+                            <span>
+                                {% if op.maquina_atual_rel %}
+                                {{ op.maquina_atual_rel.nome }}
+                                {% else %}
+                                Nenhuma máquina
+                                {% endif %}
+                            </span>
+                        </div>
+                        
+                        <div class="detail-item-admin">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <span>{{ op.estagio_atual or 'N/A' }}</span>
+                        </div>
+                        
+                        <div class="detail-item-admin">
+                            <i class="fas fa-calendar"></i>
+                            <span>
+                                {% if op.data_inicio %}
+                                {{ op.data_inicio.strftime('%d/%m/%Y') }}
+                                {% else %}
+                                Não iniciada
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="op-card-actions-admin">
+                    <button onclick="viewOPDetails({{ op.id }})" class="btn-action" title="Visualizar Detalhes">
+                        <i class="fas fa-eye"></i>
+                    </button>
+                    
+                    <button onclick="editOP({{ op.id }})" class="btn-action" title="Editar OP">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    
+                    <button onclick="printOP({{ op.id }})" class="btn-action" title="Imprimir OP">
+                        <i class="fas fa-print"></i>
+                    </button>
+                    
+                    {% if op.status_op == 'pendente' %}
+                    <button onclick="startOP({{ op.id }})" class="btn-action" title="Iniciar Produção">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    {% elif op.status_op == 'em_andamento' %}
+                    <button onclick="pauseOP({{ op.id }})" class="btn-action" title="Pausar Produção">
+                        <i class="fas fa-pause"></i>
+                    </button>
+                    {% elif op.status_op == 'pausado' %}
+                    <button onclick="resumeOP({{ op.id }})" class="btn-action" title="Retomar Produção">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    {% endif %}
+                    
+                    <button onclick="deleteOP({{ op.id }})" class="btn-action btn-danger" title="Excluir OP">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            {% else %}
+            <div class="empty-state-admin">
+                <div class="empty-icon-admin">
+                    <i class="fas fa-inbox"></i>
+                </div>
+                <h3>Nenhuma OP Cadastrada</h3>
+                <p>Comece adicionando uma nova ordem de produção.</p>
+                <button onclick="showAddOPModal()" class="btn btn-primary">
+                    <i class="fas fa-plus-circle"></i> Adicionar Primeira OP
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de OPs</h4>
+                <p class="summary-number">{{ ops|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Metros Carregados</h4>
+                <p class="summary-number">{{ ops|sum(attribute='qtde_carregado')|round(2) }}m</p>
+            </div>
+            <div class="summary-item">
+                <h4>Metros Produzidos</h4>
+                <p class="summary-number">{{ ops|sum(attribute='qtde_produzida')|round(2) }}m</p>
+            </div>
+            <div class="summary-item">
+                <h4>Eficiência</h4>
+                {% set total_carregado = ops|sum(attribute='qtde_carregado') %}
+                {% set total_produzido = ops|sum(attribute='qtde_produzida') %}
+                {% set eficiencia = (total_produzido / total_carregado * 100) if total_carregado > 0 else 0 %}
+                <p class="summary-number">{{ eficiencia|round(1) }}%</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar/editar OP -->
+    <div id="opModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title"><i class="fas fa-box"></i> <span id="modal-action">Nova</span> OP</h3>
+                <button onclick="hideOPModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="opForm">
+                    <input type="hidden" id="op_id" name="op_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="op_number">Número da OP *</label>
+                            <input type="number" id="op_number" name="op_number" required min="1">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="produto">Código do Produto *</label>
+                            <input type="text" id="produto" name="produto" placeholder="Ex: 2.K1820.TIN.000051" required>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="narrativa">Descrição *</label>
+                        <textarea id="narrativa" name="narrativa" rows="2" required></textarea>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="grupo">Grupo</label>
+                            <input type="text" id="grupo" name="grupo" placeholder="Ex: K1820">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="unidade_medida">Unidade de Medida</label>
+                            <select id="unidade_medida" name="unidade_medida">
+                                <option value="M" selected>Metros (M)</option>
+                                <option value="KG">Quilogramas (KG)</option>
+                                <option value="UN">Unidades (UN)</option>
+                                <option value="M2">Metros Quadrados (M²)</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="qtde_programado">Quantidade Programada *</label>
+                            <input type="number" step="0.01" id="qtde_programado" name="qtde_programado" required min="0">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="qtde_carregado">Quantidade Carregada *</label>
+                            <input type="number" step="0.01" id="qtde_carregado" name="qtde_carregado" required min="0">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="qtde_produzida">Quantidade Produzida</label>
+                            <input type="number" step="0.01" id="qtde_produzida" name="qtde_produzida" value="0" min="0">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="status_op">Status</label>
+                            <select id="status_op" name="status_op">
+                                <option value="pendente">Pendente</option>
+                                <option value="em_andamento">Em Andamento</option>
+                                <option value="finalizada">Finalizada</option>
+                                <option value="pausado">Pausada</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="estagio_atual">Estágio Atual</label>
+                            <select id="estagio_atual" name="estagio_atual">
+                                <option value="">Selecione...</option>
+                                <option value="PREPARAÇÃO">PREPARAÇÃO</option>
+                                <option value="TINGIMENTO">TINGIMENTO</option>
+                                <option value="ESTAMPAGEM">ESTAMPAGEM</option>
+                                <option value="ACABAMENTO">ACABAMENTO</option>
+                                <option value="CONTROLE QUALIDADE">CONTROLE QUALIDADE</option>
+                                <option value="EXPEDIÇÃO">EXPEDIÇÃO</option>
+                                <option value="FINALIZADO">FINALIZADO</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="estagio_posicao">Posição do Estágio</label>
+                            <input type="text" id="estagio_posicao" name="estagio_posicao" placeholder="Ex: 10, 45, 99">
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="maquina_atual">Máquina Atual</label>
+                        <select id="maquina_atual" name="maquina_atual">
+                            <option value="">Nenhuma</option>
+                            {% for maquina in maquinas %}
+                            <option value="{{ maquina.id }}">{{ maquina.nome }} ({{ maquina.codigo }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="observacao">Observação</label>
+                        <textarea id="observacao" name="observacao" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveOP()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar OP
+                </button>
+                <button onclick="hideOPModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para visualizar detalhes da OP -->
+    <div id="viewModal" class="modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3 id="view-modal-title"><i class="fas fa-eye"></i> Detalhes da OP</h3>
+                <button onclick="hideViewModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div id="view-op-content">
+                    <!-- Conteúdo será carregado dinamicamente -->
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="printCurrentOP()" class="btn btn-secondary">
+                    <i class="fas fa-print"></i> Imprimir
+                </button>
+                <button onclick="hideViewModal()" class="btn">
+                    <i class="fas fa-times"></i> Fechar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentOpId = null;
+        
+        function showAddOPModal() {
+            document.getElementById('modal-action').textContent = 'Nova';
+            document.getElementById('modal-title').innerHTML = '<i class="fas fa-plus-circle"></i> Nova OP';
+            document.getElementById('opForm').reset();
+            document.getElementById('op_id').value = '';
+            document.getElementById('qtde_produzida').value = '0';
+            document.getElementById('status_op').value = 'pendente';
+            document.getElementById('unidade_medida').value = 'M';
+            document.getElementById('opModal').classList.add('show');
+        }
+        
+        function hideOPModal() {
+            document.getElementById('opModal').classList.remove('show');
+        }
+        
+        function hideViewModal() {
+            document.getElementById('viewModal').classList.remove('show');
+        }
+        
+        async function saveOP() {
+            const form = document.getElementById('opForm');
+            const formData = new FormData(form);
+            
+            const opId = formData.get('op_id');
+            const url = opId ? `/api/admin/update_op/${opId}` : '/api/admin/add_op';
+            const method = opId ? 'PUT' : 'POST';
+            
+            const data = {
+                op: parseInt(formData.get('op_number')),
+                produto: formData.get('produto'),
+                narrativa: formData.get('narrativa'),
+                grupo: formData.get('grupo'),
+                qtde_programado: parseFloat(formData.get('qtde_programado')),
+                qtde_carregado: parseFloat(formData.get('qtde_carregado')),
+                qtde_produzida: parseFloat(formData.get('qtde_produzida')),
+                unidade_medida: formData.get('unidade_medida'),
+                estagio_atual: formData.get('estagio_atual'),
+                estagio_posicao: formData.get('estagio_posicao'),
+                status_op: formData.get('status_op'),
+                maquina_atual: formData.get('maquina_atual') || null,
+                observacao: formData.get('observacao')
+            };
+            
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideOPModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        async function editOP(opId) {
+            try {
+                const response = await fetch(`/api/admin/get_op/${opId}`);
+                const op = await response.json();
+                
+                if (op) {
+                    document.getElementById('modal-action').textContent = 'Editar';
+                    document.getElementById('modal-title').innerHTML = `<i class="fas fa-edit"></i> Editar OP ${op.op}`;
+                    
+                    document.getElementById('op_id').value = op.id;
+                    document.getElementById('op_number').value = op.op;
+                    document.getElementById('produto').value = op.produto;
+                    document.getElementById('narrativa').value = op.narrativa;
+                    document.getElementById('grupo').value = op.grupo || '';
+                    document.getElementById('qtde_programado').value = op.qtde_programado;
+                    document.getElementById('qtde_carregado').value = op.qtde_carregado;
+                    document.getElementById('qtde_produzida').value = op.qtde_produzida;
+                    document.getElementById('unidade_medida').value = op.unidade_medida || 'M';
+                    document.getElementById('estagio_atual').value = op.estagio_atual || '';
+                    document.getElementById('estagio_posicao').value = op.estagio_posicao || '';
+                    document.getElementById('status_op').value = op.status_op;
+                    document.getElementById('maquina_atual').value = op.maquina_atual || '';
+                    document.getElementById('observacao').value = op.observacao || '';
+                    
+                    document.getElementById('opModal').classList.add('show');
+                }
+            } catch (error) {
+                alert('❌ Erro ao carregar OP: ' + error.message);
+            }
+        }
+        
+        async function viewOPDetails(opId) {
+            currentOpId = opId;
+            
+            try {
+                const response = await fetch(`/api/admin/get_op_details/${opId}`);
+                const op = await response.json();
+                
+                if (op) {
+                    document.getElementById('view-modal-title').innerHTML = `<i class="fas fa-eye"></i> OP ${op.op} - ${op.produto}`;
+                    
+                    const percent = op.qtde_carregado > 0 ? (op.qtde_produzida / op.qtde_carregado * 100).toFixed(1) : 0;
+                    
+                    const content = `
+                        <div class="op-view-container">
+                            <div class="op-view-header">
+                                <div class="op-view-qr">
+                                    <img src="/api/generate_op_qr/${op.op}" alt="QR Code" width="120">
+                                    <p><strong>OP ${op.op}</strong></p>
+                                </div>
+                                
+                                <div class="op-view-status">
+                                    <span class="status-badge-large ${op.status_op}">
+                                        ${op.status_op.toUpperCase()}
+                                    </span>
+                                    <p class="op-view-date">
+                                        <i class="fas fa-calendar"></i> 
+                                        Criada em: ${new Date(op.data_importacao).toLocaleDateString('pt-BR')}
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-info-circle"></i> Informações da OP</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Produto:</span>
+                                        <span class="view-value">${op.produto}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Descrição:</span>
+                                        <span class="view-value">${op.narrativa}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Grupo:</span>
+                                        <span class="view-value">${op.grupo || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Unidade:</span>
+                                        <span class="view-value">${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-chart-bar"></i> Quantidades</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Programado:</span>
+                                        <span class="view-value">${parseFloat(op.qtde_programado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Carregado:</span>
+                                        <span class="view-value">${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Produzido:</span>
+                                        <span class="view-value highlight">${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Disponível:</span>
+                                        <span class="view-value">${(parseFloat(op.qtde_carregado) - parseFloat(op.qtde_produzida)).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="op-view-progress">
+                                    <div class="progress-info-view">
+                                        <span>Progresso da Produção:</span>
+                                        <span><strong>${percent}%</strong></span>
+                                    </div>
+                                    <div class="progress-bar-view">
+                                        <div class="progress-fill-view" style="width: ${percent}%"></div>
+                                    </div>
+                                    <div class="progress-numbers-view">
+                                        <span>${parseFloat(op.qtde_produzida).toFixed(2)} ${op.unidade_medida}</span>
+                                        <span>/</span>
+                                        <span>${parseFloat(op.qtde_carregado).toFixed(2)} ${op.unidade_medida}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-cogs"></i> Status e Localização</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Status:</span>
+                                        <span class="view-value status-${op.status_op}">${op.status_op.toUpperCase()}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Estágio Atual:</span>
+                                        <span class="view-value">${op.estagio_atual || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Posição Estágio:</span>
+                                        <span class="view-value">${op.estagio_posicao || 'N/A'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Máquina Atual:</span>
+                                        <span class="view-value">${op.maquina_atual_nome || 'Nenhuma'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-history"></i> Datas</h4>
+                                <div class="op-view-grid">
+                                    <div class="op-view-item">
+                                        <span class="view-label">Data Início:</span>
+                                        <span class="view-value">${op.data_inicio ? new Date(op.data_inicio).toLocaleDateString('pt-BR') : 'Não iniciada'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Data Término:</span>
+                                        <span class="view-value">${op.data_termino ? new Date(op.data_termino).toLocaleDateString('pt-BR') : 'Não finalizada'}</span>
+                                    </div>
+                                    <div class="op-view-item">
+                                        <span class="view-label">Última Atualização:</span>
+                                        <span class="view-value">${new Date(op.sincronizado_em || op.data_importacao).toLocaleString('pt-BR')}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            ${op.observacao ? `
+                            <div class="op-view-section">
+                                <h4><i class="fas fa-sticky-note"></i> Observação</h4>
+                                <div class="op-view-observacao">
+                                    ${op.observacao}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    `;
+                    
+                    document.getElementById('view-op-content').innerHTML = content;
+                    document.getElementById('viewModal').classList.add('show');
+                }
+            } catch (error) {
+                alert('❌ Erro ao carregar detalhes da OP: ' + error.message);
+            }
+        }
+        
+        function printCurrentOP() {
+            if (currentOpId) {
+                printOP(currentOpId);
+            }
+        }
+        
+        function printOP(opId) {
+            const printWindow = window.open('', '_blank');
+            const url = `/admin/op/${opId}/print`;
+            printWindow.location.href = url;
+        }
+        
+        function printAllOPs() {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Lista de OPs</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; }
+                        .header { text-align: center; margin-bottom: 30px; }
+                        .op-list { display: grid; gap: 20px; }
+                        .op-item { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+                        .op-number { font-size: 18px; font-weight: bold; }
+                        .op-details { margin-top: 10px; }
+                        .qr-code { text-align: center; margin: 10px 0; }
+                        @media print {
+                            .op-list { grid-template-columns: repeat(2, 1fr); }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>Lista de Ordens de Produção</h1>
+                        <p>Gerado em: ${new Date().toLocaleDateString('pt-BR')}</p>
+                    </div>
+                    <div class="op-list">
+                        <!-- O conteúdo será carregado pelo servidor -->
+                        Carregando OPs...
+                    </div>
+                    <script>
+                        // Carregar OPs via AJAX
+                        fetch('/api/admin/all_ops')
+                            .then(response => response.json())
+                            .then(ops => {
+                                const opList = document.querySelector('.op-list');
+                                opList.innerHTML = '';
+                                
+                                ops.forEach(op => {
+                                    const percent = op.qtde_carregado > 0 ? 
+                                        (op.qtde_produzida / op.qtde_carregado * 100).toFixed(1) : 0;
+                                    
+                                    const opItem = document.createElement('div');
+                                    opItem.className = 'op-item';
+                                    opItem.innerHTML = \`
+                                        <div class="op-number">OP \${op.op}</div>
+                                        <div class="qr-code">
+                                            <img src="/api/generate_op_qr/\${op.op}" alt="QR Code" width="80">
+                                        </div>
+                                        <div class="op-details">
+                                            <p><strong>Produto:</strong> \${op.produto}</p>
+                                            <p><strong>Status:</strong> \${op.status_op.toUpperCase()}</p>
+                                            <p><strong>Progresso:</strong> \${percent}%</p>
+                                            <p><small>\${op.qtde_produzida.toFixed(2)}/\${op.qtde_carregado.toFixed(2)} \${op.unidade_medida}</small></p>
+                                        </div>
+                                    \`;
+                                    opList.appendChild(opItem);
+                                });
+                                
+                                setTimeout(() => {
+                                    window.print();
+                                    setTimeout(() => window.close(), 500);
+                                }, 1000);
+                            });
+                    <\/script>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+        }
+        
+        async function startOP(opId) {
+            if (confirm('Iniciar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/start_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function pauseOP(opId) {
+            if (confirm('Pausar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/pause_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function resumeOP(opId) {
+            if (confirm('Retomar produção desta OP?')) {
+                try {
+                    const response = await fetch(`/api/admin/resume_op/${opId}`, { method: 'POST' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        async function deleteOP(opId) {
+            if (confirm('Tem certeza que deseja excluir esta OP?\nEsta ação não pode ser desfeita!')) {
+                try {
+                    const response = await fetch(`/api/admin/delete_op/${opId}`, { method: 'DELETE' });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        alert('✅ ' + result.message);
+                        location.reload();
+                    } else {
+                        alert('❌ ' + result.message);
+                    }
+                } catch (error) {
+                    alert('❌ Erro: ' + error.message);
+                }
+            }
+        }
+        
+        function filterOPs() {
+            const filter = document.getElementById('filter-status').value;
+            const cards = document.querySelectorAll('.op-card-admin');
+            
+            cards.forEach(card => {
+                if (!filter || card.dataset.status === filter) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+        
+        function searchOPs() {
+            const search = document.getElementById('search-op').value.toLowerCase();
+            const cards = document.querySelectorAll('.op-card-admin');
+            
+            cards.forEach(card => {
+                const text = card.textContent.toLowerCase();
+                if (text.includes(search)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>

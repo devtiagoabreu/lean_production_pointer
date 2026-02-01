@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motivos de Parada</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h1>MOTIVOS DE PARADA</h1>
+            </div>
+            <p class="subtitle">Configure os motivos de parada para apontamento de produção</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link active">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+        </div>
+        
+        <div class="admin-actions">
+            <button onclick="showAddMotivoModal()" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Adicionar Novo Motivo
+            </button>
+            
+            <div class="view-toggle">
+                <button onclick="showCategorizedView()" class="btn btn-outline active">
+                    <i class="fas fa-list"></i> Visualização por Categoria
+                </button>
+                <button onclick="showListView()" class="btn btn-outline">
+                    <i class="fas fa-table"></i> Visualização em Lista
+                </button>
+            </div>
+        </div>
+        
+        <!-- Visualização por Categoria -->
+        <div id="categorized-view" class="categorized-view">
+            {% set categorias = motivos|groupby('categoria') %}
+            {% for categoria, motivos_categoria in categorias %}
+            <div class="category-card">
+                <div class="category-header">
+                    <h3>{{ categoria|upper }}</h3>
+                    <span class="count-badge">{{ motivos_categoria|length }} motivos</span>
+                </div>
+                
+                <div class="motivos-grid">
+                    {% for motivo in motivos_categoria %}
+                    <div class="motivo-card {{ motivo.cor }}">
+                        <div class="motivo-header">
+                            <div class="motivo-icon">
+                                {% if motivo.categoria == 'tecnica' %}
+                                <i class="fas fa-tools"></i>
+                                {% elif motivo.categoria == 'organizacional' %}
+                                <i class="fas fa-users"></i>
+                                {% elif motivo.categoria == 'logistica' %}
+                                <i class="fas fa-truck"></i>
+                                {% elif motivo.categoria == 'planejada' %}
+                                <i class="fas fa-calendar-check"></i>
+                                {% else %}
+                                <i class="fas fa-exclamation-circle"></i>
+                                {% endif %}
+                            </div>
+                            <div class="motivo-info">
+                                <h4>{{ motivo.descricao }}</h4>
+                                <p class="motivo-codigo">{{ motivo.codigo }}</p>
+                            </div>
+                        </div>
+                        
+                        <div class="motivo-details">
+                            <div class="detail-item">
+                                <span class="detail-label">Categoria:</span>
+                                <span class="detail-value">{{ motivo.categoria }}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Cor:</span>
+                                <span class="detail-value">{{ motivo.cor }}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Justificativa:</span>
+                                <span class="detail-value">
+                                    {% if motivo.requer_justificativa %}
+                                    <i class="fas fa-check-circle text-success"></i> Obrigatória
+                                    {% else %}
+                                    <i class="fas fa-times-circle text-muted"></i> Opcional
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Status:</span>
+                                <span class="detail-value">
+                                    {% if motivo.ativo %}
+                                    <i class="fas fa-check-circle text-success"></i> Ativo
+                                    {% else %}
+                                    <i class="fas fa-times-circle text-danger"></i> Inativo
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                        
+                        <div class="motivo-actions">
+                            <button onclick="editMotivo({{ motivo.id }})" class="btn-icon" title="Editar">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="toggleMotivoStatus({{ motivo.id }}, {{ motivo.ativo }})" 
+                                    class="btn-icon" title="{{ 'Desativar' if motivo.ativo else 'Ativar' }}">
+                                {% if motivo.ativo %}
+                                <i class="fas fa-toggle-on"></i>
+                                {% else %}
+                                <i class="fas fa-toggle-off"></i>
+                                {% endif %}
+                            </button>
+                            <button onclick="viewMotivoStats({{ motivo.id }})" class="btn-icon" title="Estatísticas">
+                                <i class="fas fa-chart-bar"></i>
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        
+        <!-- Visualização em Lista -->
+        <div id="list-view" class="list-view" style="display: none;">
+            <div class="table-container">
+                <table id="motivos-table">
+                    <thead>
+                        <tr>
+                            <th>Código</th>
+                            <th>Descrição</th>
+                            <th>Categoria</th>
+                            <th>Cor</th>
+                            <th>Justificativa</th>
+                            <th>Ordem</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for motivo in motivos %}
+                        <tr data-categoria="{{ motivo.categoria }}" data-ativo="{{ motivo.ativo }}">
+                            <td><strong>{{ motivo.codigo }}</strong></td>
+                            <td>{{ motivo.descricao }}</td>
+                            <td>
+                                <span class="categoria-badge {{ motivo.categoria }}">
+                                    {{ motivo.categoria|upper }}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="color-preview" style="background-color: {{ motivo.cor }};"></div>
+                                <span>{{ motivo.cor }}</span>
+                            </td>
+                            <td>
+                                {% if motivo.requer_justificativa %}
+                                <i class="fas fa-check-circle text-success"></i> Obrigatória
+                                {% else %}
+                                <i class="fas fa-times-circle text-muted"></i> Opcional
+                                {% endif %}
+                            </td>
+                            <td>{{ motivo.ordem_exibicao }}</td>
+                            <td>
+                                {% if motivo.ativo %}
+                                <span class="status-badge active">
+                                    <i class="fas fa-check-circle"></i> ATIVO
+                                </span>
+                                {% else %}
+                                <span class="status-badge inactive">
+                                    <i class="fas fa-times-circle"></i> INATIVO
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <button onclick="editMotivo({{ motivo.id }})" class="btn-icon" title="Editar">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button onclick="toggleMotivoStatus({{ motivo.id }}, {{ motivo.ativo }})" 
+                                            class="btn-icon" title="{{ 'Desativar' if motivo.ativo else 'Ativar' }}">
+                                        {% if motivo.ativo %}
+                                        <i class="fas fa-toggle-on"></i>
+                                        {% else %}
+                                        <i class="fas fa-toggle-off"></i>
+                                        {% endif %}
+                                    </button>
+                                    <button onclick="viewMotivoStats({{ motivo.id }})" class="btn-icon" title="Estatísticas">
+                                        <i class="fas fa-chart-bar"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-item">
+                <h4>Total de Motivos</h4>
+                <p class="summary-number">{{ motivos|length }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Motivos Ativos</h4>
+                {% set ativos = motivos|selectattr('ativo', 'equalto', true)|list|length %}
+                <p class="summary-number">{{ ativos }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Categorias</h4>
+                {% set categorias_unicas = motivos|map(attribute='categoria')|unique|list|length %}
+                <p class="summary-number">{{ categorias_unicas }}</p>
+            </div>
+            <div class="summary-item">
+                <h4>Com Justificativa</h4>
+                {% set com_justificativa = motivos|selectattr('requer_justificativa', 'equalto', true)|list|length %}
+                <p class="summary-number">{{ com_justificativa }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para adicionar/editar motivo -->
+    <div id="motivoModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-motivo-title"><i class="fas fa-plus-circle"></i> Novo Motivo de Parada</h3>
+                <button onclick="hideMotivoModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <form id="motivoForm">
+                    <input type="hidden" id="motivo_id" name="motivo_id">
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="codigo">Código *</label>
+                            <input type="text" id="codigo" name="codigo" required 
+                                   placeholder="Ex: ENE001, MAN001">
+                            <small>Identificador único para o motivo</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="descricao">Descrição *</label>
+                            <input type="text" id="descricao" name="descricao" required 
+                                   placeholder="Ex: Falta de energia, Manutenção corretiva">
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="categoria">Categoria *</label>
+                            <select id="categoria" name="categoria" required>
+                                <option value="">Selecione uma categoria...</option>
+                                <option value="tecnica">Técnica</option>
+                                <option value="organizacional">Organizacional</option>
+                                <option value="logistica">Logística</option>
+                                <option value="planejada">Planejada</option>
+                                <option value="qualidade">Qualidade</option>
+                                <option value="diversos">Diversos</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="cor">Cor *</label>
+                            <select id="cor" name="cor" required>
+                                <option value="">Selecione uma cor...</option>
+                                <option value="vermelho">Vermelho</option>
+                                <option value="laranja">Laranja</option>
+                                <option value="amarelo">Amarelo</option>
+                                <option value="verde">Verde</option>
+                                <option value="azul">Azul</option>
+                                <option value="roxo">Roxo</option>
+                                <option value="cinza">Cinza</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="ordem_exibicao">Ordem de Exibição</label>
+                            <input type="number" id="ordem_exibicao" name="ordem_exibicao" 
+                                   value="0" min="0" max="100">
+                            <small>Define a ordem na lista (menor = primeiro)</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="requer_justificativa">Requer Justificativa</label>
+                            <select id="requer_justificativa" name="requer_justificativa">
+                                <option value="false">Não</option>
+                                <option value="true">Sim</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="ativo" name="ativo" checked>
+                            Motivo Ativo
+                        </label>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveMotivo()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Motivo
+                </button>
+                <button onclick="hideMotivoModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function showAddMotivoModal() {
+            document.getElementById('modal-motivo-title').innerHTML = '<i class="fas fa-plus-circle"></i> Novo Motivo de Parada';
+            document.getElementById('motivoForm').reset();
+            document.getElementById('motivo_id').value = '';
+            document.getElementById('ativo').checked = true;
+            document.getElementById('motivoModal').classList.add('show');
+        }
+        
+        function hideMotivoModal() {
+            document.getElementById('motivoModal').classList.remove('show');
+        }
+        
+        async function saveMotivo() {
+            const form = document.getElementById('motivoForm');
+            const formData = new FormData(form);
+            
+            const data = {
+                codigo: formData.get('codigo'),
+                descricao: formData.get('descricao'),
+                categoria: formData.get('categoria'),
+                cor: formData.get('cor'),
+                ordem_exibicao: parseInt(formData.get('ordem_exibicao')),
+                requer_justificativa: formData.get('requer_justificativa') === 'true',
+                ativo: formData.get('ativo') === 'on'
+            };
+            
+            try {
+                const response = await fetch('/api/admin/add_motivo', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    hideMotivoModal();
+                    location.reload();
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro: ' + error.message);
+            }
+        }
+        
+        function editMotivo(motivoId) {
+            // Implementar edição
+            alert('Funcionalidade de edição será implementada em breve!');
+        }
+        
+        function toggleMotivoStatus(motivoId, isActive) {
+            const action = isActive ? 'desativar' : 'ativar';
+            const confirmMessage = `Tem certeza que deseja ${action} este motivo?`;
+            
+            if (confirm(confirmMessage)) {
+                // Implementar mudança de status
+                alert(`Motivo ${action}do com sucesso!`);
+                location.reload();
+            }
+        }
+        
+        function viewMotivoStats(motivoId) {
+            window.location.href = `/admin/motivo/${motivoId}/stats`;
+        }
+        
+        function showCategorizedView() {
+            document.getElementById('categorized-view').style.display = 'block';
+            document.getElementById('list-view').style.display = 'none';
+            
+            // Atualizar botões ativos
+            document.querySelectorAll('.view-toggle button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+        
+        function showListView() {
+            document.getElementById('categorized-view').style.display = 'none';
+            document.getElementById('list-view').style.display = 'block';
+            
+            // Atualizar botões ativos
+            document.querySelectorAll('.view-toggle button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>

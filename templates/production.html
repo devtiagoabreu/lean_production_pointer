@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apontamento de Produção</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container production-container">
+        <div class="header">
+            <a href="/selecionar_op" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <h1><i class="fas fa-cogs"></i> APONTAMENTO DE PRODUÇÃO</h1>
+        </div>
+        
+        <div class="machine-info-card">
+            <div class="machine-header">
+                <div class="machine-icon">
+                    <i class="fas fa-industry"></i>
+                </div>
+                <div>
+                    <h2>{{ maquina.nome }}</h2>
+                    <p class="machine-code">{{ maquina.codigo }} • {{ maquina.setor|upper }}</p>
+                    <div class="status-badge working">
+                        <i class="fas fa-play-circle"></i> EM PRODUÇÃO
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="op-info-card">
+            <div class="op-header">
+                <h3><i class="fas fa-box"></i> OP {{ op.op }}</h3>
+                <span class="op-status">{{ op.status_op|upper }}</span>
+            </div>
+            
+            <div class="op-details">
+                <div class="detail-item">
+                    <span class="detail-label">Produto:</span>
+                    <span class="detail-value">{{ op.produto }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Descrição:</span>
+                    <span class="detail-value">{{ op.narrativa }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Grupo:</span>
+                    <span class="detail-value">{{ op.grupo }}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="detail-label">Estágio:</span>
+                    <span class="detail-value">{{ op.estagio_atual }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="production-form-card">
+            <h3><i class="fas fa-edit"></i> REGISTRAR PRODUÇÃO</h3>
+            
+            <div class="form-group">
+                <label for="metros-carregados">
+                    <i class="fas fa-ruler"></i> Metros Carregados na OP:
+                </label>
+                <input type="number" id="metros-carregados" value="{{ op.qtde_carregado }}" readonly>
+            </div>
+            
+            <div class="form-group">
+                <label for="metros-produzidos">
+                    <i class="fas fa-check-circle"></i> Metros Já Produzidos:
+                </label>
+                <input type="number" id="metros-produzidos" value="{{ op.qtde_produzida }}" readonly>
+            </div>
+            
+            <div class="form-group">
+                <label for="metros-processados">
+                    <i class="fas fa-bolt"></i> Metros Processados Agora:
+                </label>
+                <div class="input-with-controls">
+                    <input type="number" id="metros-processados" 
+                           value="{{ metros_disponiveis }}" 
+                           min="0" 
+                           max="{{ metros_disponiveis }}"
+                           step="0.01">
+                    
+                    <div class="quick-controls">
+                        <button type="button" onclick="adjustMetros(-100)" class="btn-quick">
+                            -100
+                        </button>
+                        <button type="button" onclick="adjustMetros(-10)" class="btn-quick">
+                            -10
+                        </button>
+                        <span id="current-value">{{ metros_disponiveis }}</span>
+                        <button type="button" onclick="adjustMetros(10)" class="btn-quick">
+                            +10
+                        </button>
+                        <button type="button" onclick="adjustMetros(100)" class="btn-quick">
+                            +100
+                        </button>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progress-text">100% disponível</span>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="observacao">
+                    <i class="fas fa-comment"></i> Observações:
+                </label>
+                <textarea id="observacao" placeholder="Observações sobre qualidade, problemas, etc..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button onclick="registrarProducao()" class="btn btn-success btn-large">
+                    <i class="fas fa-check-circle"></i> CONFIRMAR PRODUÇÃO
+                </button>
+                
+                <div class="secondary-actions">
+                    <button onclick="showParadaModal()" class="btn btn-warning">
+                        <i class="fas fa-exclamation-triangle"></i> REGISTRAR PARADA
+                    </button>
+                    
+                    <button onclick="window.location.href='/'" class="btn btn-secondary">
+                        <i class="fas fa-times"></i> CANCELAR
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="operator-info">
+            <p><i class="fas fa-user"></i> Operador: {{ usuario.nome }}</p>
+            <p><i class="fas fa-clock"></i> Hora: <span id="current-time"></span></p>
+        </div>
+    </div>
+    
+    <!-- Modal de Parada -->
+    <div id="paradaModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle"></i> REGISTRAR PARADA</h3>
+                <button onclick="hideParadaModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="motivo-parada">Motivo da Parada:</label>
+                    <select id="motivo-parada" onchange="toggleMotivoPersonalizado()">
+                        <option value="">Selecione um motivo...</option>
+                        <!-- Será preenchido via JavaScript -->
+                    </select>
+                </div>
+                
+                <div id="motivo-personalizado-container" class="hidden">
+                    <div class="form-group">
+                        <label for="motivo-personalizado">Descreva o motivo:</label>
+                        <input type="text" id="motivo-personalizado" placeholder="Descreva o motivo da parada...">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="justificativa-parada">Justificativa (opcional):</label>
+                    <textarea id="justificativa-parada" placeholder="Detalhes adicionais sobre a parada..."></textarea>
+                </div>
+                
+                <div class="timer-display">
+                    <div class="timer">
+                        <i class="fas fa-stopwatch"></i>
+                        <span id="parada-timer">00:00</span>
+                    </div>
+                    <p class="timer-note">A parada será registrada imediatamente</p>
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="registrarParada()" class="btn btn-danger">
+                    <i class="fas fa-stop-circle"></i> CONFIRMAR PARADA
+                </button>
+                <button onclick="hideParadaModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> CANCELAR
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let metrosDisponiveis = {{ metros_disponiveis }};
+        
+        function adjustMetros(change) {
+            const input = document.getElementById('metros-processados');
+            let currentValue = parseFloat(input.value) || 0;
+            let newValue = currentValue + change;
+            
+            // Limitar entre 0 e metrosDisponiveis
+            newValue = Math.max(0, Math.min(metrosDisponiveis, newValue));
+            
+            input.value = newValue;
+            updateProgress();
+        }
+        
+        function updateProgress() {
+            const input = document.getElementById('metros-processados');
+            const currentValue = parseFloat(input.value) || 0;
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            
+            const percentage = (currentValue / metrosDisponiveis) * 100;
+            progressFill.style.width = `${percentage}%`;
+            
+            const metrosRestantes = metrosDisponiveis - currentValue;
+            progressText.textContent = `${metrosRestantes.toFixed(2)}m restantes (${percentage.toFixed(1)}% utilizado)`;
+        }
+        
+        async function registrarProducao() {
+            const metrosProcessados = document.getElementById('metros-processados').value;
+            const observacao = document.getElementById('observacao').value;
+            
+            if (!metrosProcessados || parseFloat(metrosProcessados) <= 0) {
+                alert('Informe a quantidade de metros processados!');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/registrar_apontamento', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        metros_processados: parseFloat(metrosProcessados),
+                        observacao: observacao
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                    if (result.redirect) {
+                        window.location.href = result.redirect;
+                    }
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao registrar produção: ' + error.message);
+            }
+        }
+        
+        function showParadaModal() {
+            loadMotivosParada();
+            document.getElementById('paradaModal').classList.add('show');
+        }
+        
+        function hideParadaModal() {
+            document.getElementById('paradaModal').classList.remove('show');
+        }
+        
+        async function loadMotivosParada() {
+            try {
+                const response = await fetch('/api/get_motivos_parada');
+                const motivos = await response.json();
+                
+                const select = document.getElementById('motivo-parada');
+                select.innerHTML = '<option value="">Selecione um motivo...</option>';
+                
+                motivos.forEach(motivo => {
+                    const option = document.createElement('option');
+                    option.value = motivo.id;
+                    option.textContent = `${motivo.codigo} - ${motivo.descricao}`;
+                    option.dataset.codigo = motivo.codigo;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Erro ao carregar motivos:', error);
+            }
+        }
+        
+        function toggleMotivoPersonalizado() {
+            const select = document.getElementById('motivo-parada');
+            const selectedOption = select.options[select.selectedIndex];
+            const container = document.getElementById('motivo-personalizado-container');
+            
+            if (selectedOption.dataset.codigo === 'OUT001') {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        }
+        
+        async function registrarParada() {
+            const motivoSelect = document.getElementById('motivo-parada');
+            const motivoId = motivoSelect.value;
+            const motivoPersonalizado = document.getElementById('motivo-personalizado').value;
+            const justificativa = document.getElementById('justificativa-parada').value;
+            
+            if (!motivoId) {
+                alert('Selecione um motivo para a parada!');
+                return;
+            }
+            
+            const data = {
+                motivo_id: motivoId,
+                justificativa: justificativa
+            };
+            
+            if (motivoPersonalizado) {
+                data.motivo_personalizado = motivoPersonalizado;
+            }
+            
+            try {
+                const response = await fetch('/api/registrar_parada', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert('⚠️ ' + result.message);
+                    if (result.redirect) {
+                        window.location.href = result.redirect;
+                    }
+                } else {
+                    alert('❌ ' + result.message);
+                }
+            } catch (error) {
+                alert('❌ Erro ao registrar parada: ' + error.message);
+            }
+        }
+        
+        // Atualizar tempo atual
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('pt-BR', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('current-time').textContent = timeString;
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            
+            // Atualizar progresso quando o valor mudar
+            const input = document.getElementById('metros-processados');
+            input.addEventListener('input', updateProgress);
+            
+            // Inicializar progresso
+            updateProgress();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sincronização com API</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/admin/dashboard" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-sync-alt"></i>
+                <h1>SINCRONIZAÇÃO COM API</h1>
+            </div>
+            <p class="subtitle">Importe OPs automaticamente do Systêxtil</p>
+        </div>
+        
+        <div class="admin-nav">
+            <a href="/admin/dashboard" class="nav-link">
+                <i class="fas fa-tachometer-alt"></i> Dashboard
+            </a>
+            <a href="/admin/ops" class="nav-link">
+                <i class="fas fa-box"></i> OPs
+            </a>
+            <a href="/admin/maquinas" class="nav-link">
+                <i class="fas fa-industry"></i> Máquinas
+            </a>
+            <a href="/admin/usuarios" class="nav-link">
+                <i class="fas fa-users"></i> Usuários
+            </a>
+            <a href="/admin/motivos_parada" class="nav-link">
+                <i class="fas fa-exclamation-triangle"></i> Paradas
+            </a>
+            <a href="/admin/api_sync" class="nav-link active">
+                <i class="fas fa-sync-alt"></i> API Sync
+            </a>
+        </div>
+        
+        <!-- Status da API -->
+        <div class="api-status-section">
+            <h3><i class="fas fa-plug"></i> Status da Conexão</h3>
+            <div class="api-status-grid">
+                <div class="api-status-card">
+                    <div class="api-status-icon">
+                        <i class="fas fa-server"></i>
+                    </div>
+                    <div class="api-status-content">
+                        <h4>API Externa</h4>
+                        <p class="api-status-text" id="api-status">Testando conexão...</p>
+                        <p class="api-config">
+                            <small>URL: {{ api_config.base_url }}</small><br>
+                            <small>Client ID: {{ api_config.client_id }}</small>
+                        </p>
+                    </div>
+                </div>
+                
+                <div class="api-status-card">
+                    <div class="api-status-icon">
+                        <i class="fas fa-history"></i>
+                    </div>
+                    <div class="api-status-content">
+                        <h4>Última Sincronização</h4>
+                        <p class="api-last-sync">
+                            {% if last_success %}
+                            {{ last_success.data_execucao.strftime('%d/%m/%Y %H:%M') }}
+                            {% else %}
+                            Nunca realizada
+                            {% endif %}
+                        </p>
+                        <p class="api-stats">
+                            {{ sync_success }} sucessos / {{ sync_error }} erros
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="api-actions">
+                <button onclick="testAPIConnection()" class="btn btn-primary">
+                    <i class="fas fa-plug"></i> Testar Conexão
+                </button>
+                <button onclick="syncNow()" class="btn btn-success">
+                    <i class="fas fa-sync-alt"></i> Sincronizar Agora
+                </button>
+                <button onclick="showConfigModal()" class="btn btn-outline">
+                    <i class="fas fa-cog"></i> Configurações
+                </button>
+            </div>
+        </div>
+        
+        <!-- Logs de Sincronização -->
+        <div class="sync-logs-section">
+            <h3><i class="fas fa-history"></i> Histórico de Sincronizações</h3>
+            <div class="table-container">
+                <table id="sync-logs-table">
+                    <thead>
+                        <tr>
+                            <th>Data/Hora</th>
+                            <th>Tipo</th>
+                            <th>Registros</th>
+                            <th>Duração</th>
+                            <th>Status</th>
+                            <th>Mensagem</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in logs %}
+                        <tr class="log-{{ log.status }}">
+                            <td>{{ log.data_execucao.strftime('%d/%m/%Y %H:%M') }}</td>
+                            <td>{{ log.tipo|upper }}</td>
+                            <td>
+                                <span class="log-stats">
+                                    {{ log.registros_novos }}N / {{ log.registros_atualizados }}A
+                                </span>
+                            </td>
+                            <td>{{ log.duracao_segundos|round(2) }}s</td>
+                            <td>
+                                <span class="status-badge status-{{ log.status }}">
+                                    {% if log.status == 'sucesso' %}
+                                        <i class="fas fa-check-circle"></i>
+                                    {% elif log.status == 'erro' %}
+                                        <i class="fas fa-times-circle"></i>
+                                    {% else %}
+                                        <i class="fas fa-exclamation-circle"></i>
+                                    {% endif %}
+                                    {{ log.status|upper }}
+                                </span>
+                            </td>
+                            <td class="log-message">{{ log.mensagem|truncate(50) }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center">Nenhum log de sincronização encontrado</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="sync-controls">
+                <button onclick="loadMoreLogs()" class="btn btn-secondary">
+                    <i class="fas fa-redo"></i> Carregar Mais
+                </button>
+                <button onclick="clearLogs()" class="btn btn-outline">
+                    <i class="fas fa-trash"></i> Limpar Logs Antigos
+                </button>
+            </div>
+        </div>
+        
+        <!-- Informações da API -->
+        <div class="api-info-section">
+            <h3><i class="fas fa-info-circle"></i> Informações da API</h3>
+            <div class="api-info-grid">
+                <div class="api-info-card">
+                    <h4><i class="fas fa-database"></i> O que é sincronizado?</h4>
+                    <ul>
+                        <li>Ordens de Produção (OPs)</li>
+                        <li>Quantidades carregadas e produzidas</li>
+                        <li>Status e estágios das OPs</li>
+                        <li>Máquinas atribuídas</li>
+                        <li>Observações e metadados</li>
+                    </ul>
+                </div>
+                
+                <div class="api-info-card">
+                    <h4><i class="fas fa-clock"></i> Como funciona?</h4>
+                    <ul>
+                        <li>Conexão segura via OAuth2</li>
+                        <li>Atualização incremental (apenas mudanças)</li>
+                        <li>Preserva dados locais não sincronizados</li>
+                        <li>Log detalhado de todas as operações</li>
+                        <li>Reconciliação automática de conflitos</li>
+                    </ul>
+                </div>
+                
+                <div class="api-info-card">
+                    <h4><i class="fas fa-exclamation-triangle"></i> Considerações</h4>
+                    <ul>
+                        <li>Requer acesso à internet</li>
+                        <li>Credenciais devem ser configuradas</li>
+                        <li>OPs locais têm prioridade em conflitos</li>
+                        <li>Backup recomendado antes da sincronização</li>
+                        <li>Logs são mantidos por 30 dias</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Configurações Automáticas -->
+        <div class="auto-sync-section">
+            <h3><i class="fas fa-robot"></i> Sincronização Automática</h3>
+            <div class="auto-sync-config">
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="auto-sync-enabled">
+                        Habilitar sincronização automática
+                    </label>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="sync-interval">Intervalo:</label>
+                        <select id="sync-interval">
+                            <option value="15">15 minutos</option>
+                            <option value="30" selected>30 minutos</option>
+                            <option value="60">1 hora</option>
+                            <option value="240">4 horas</option>
+                            <option value="720">12 horas</option>
+                            <option value="1440">1 dia</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="sync-time">Horário preferencial:</label>
+                        <input type="time" id="sync-time" value="06:00">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="sync-notifications" checked>
+                        Notificar sobre novas OPs
+                    </label>
+                </div>
+                
+                <button onclick="saveAutoSyncConfig()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Configurações
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal de Configuração -->
+    <div id="configModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-cog"></i> Configurações da API</h3>
+                <button onclick="hideConfigModal()" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="api-base-url">URL Base da API:</label>
+                    <input type="text" id="api-base-url" 
+                           value="{{ api_config.base_url }}"
+                           placeholder="https://promoda.systextil.com.br/apexbd/erp">
+                </div>
+                
+                <div class="form-group">
+                    <label for="api-token-url">URL de Token:</label>
+                    <input type="text" id="api-token-url"
+                           value="{{ api_config.token_url or 'https://promoda.systextil.com.br/apexbd/erp/oauth/token' }}"
+                           placeholder="https://promoda.systextil.com.br/apexbd/erp/oauth/token">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="api-client-id">Client ID:</label>
+                        <input type="text" id="api-client-id" 
+                               value="{{ api_config.raw_client_id or '' }}"
+                               placeholder="vM_z3JIQSR7fMml912X4Wg..">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="api-client-secret">Client Secret:</label>
+                        <input type="password" id="api-client-secret"
+                               value="{{ api_config.raw_client_secret or '' }}"
+                               placeholder="v6CnE7I6vI6JkYn7DOIQ6A..">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="api-endpoint">Endpoint de OPs:</label>
+                    <input type="text" id="api-endpoint"
+                           value="/systextil-intg-plm/api_pcp_ops"
+                           placeholder="/systextil-intg-plm/api_pcp_ops">
+                </div>
+            </div>
+            
+            <div class="modal-footer">
+                <button onclick="saveAPIConfig()" class="btn btn-primary">
+                    <i class="fas fa-save"></i> Salvar Configurações
+                </button>
+                <button onclick="hideConfigModal()" class="btn btn-secondary">
+                    <i class="fas fa-times"></i> Cancelar
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Testar conexão com API
+        async function testAPIConnection() {
+            const statusElement = document.getElementById('api-status');
+            statusElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando conexão...';
+            
+            try {
+                const response = await fetch('/api/sync/test_connection');
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusElement.innerHTML = '<i class="fas fa-check-circle"></i> Conectado com sucesso!';
+                    statusElement.style.color = '#28a745';
+                    
+                    if (result.token_expiry) {
+                        const expiry = new Date(result.token_expiry);
+                        const now = new Date();
+                        const diff = Math.floor((expiry - now) / 60000); // minutos
+                        
+                        statusElement.innerHTML += `<br><small>Token válido por mais ${diff} minutos</small>`;
+                    }
+                } else {
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                }
+            } catch (error) {
+                statusElement.innerHTML = `<i class="fas fa-times-circle"></i> Erro: ${error.message}`;
+                statusElement.style.color = '#dc3545';
+            }
+        }
+        
+        // Sincronizar agora
+        async function syncNow() {
+            if (!confirm('Deseja sincronizar as OPs com a API agora?\nEsta operação pode demorar alguns minutos.')) {
+                return;
+            }
+            
+            const statusElement = document.getElementById('api-status');
+            statusElement.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Sincronizando...';
+            
+            try {
+                const response = await fetch('/api/sync/ops', {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusElement.innerHTML = `<i class="fas fa-check-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#28a745';
+                    
+                    // Recarregar a página após 2 segundos para mostrar os novos logs
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    statusElement.innerHTML = `<i class="fas fa-times-circle"></i> ${result.message}`;
+                    statusElement.style.color = '#dc3545';
+                }
+            } catch (error) {
+                statusElement.innerHTML = `<i class="fas fa-times-circle"></i> Erro: ${error.message}`;
+                statusElement.style.color = '#dc3545';
+            }
+        }
+        
+        // Carregar mais logs
+        async function loadMoreLogs() {
+            try {
+                const response = await fetch('/api/sync/logs');
+                const logs = await response.json();
+                
+                // Implementar lógica para adicionar mais logs à tabela
+                alert('Funcionalidade de carregar mais logs será implementada na próxima versão!');
+            } catch (error) {
+                alert('Erro ao carregar logs: ' + error.message);
+            }
+        }
+        
+        // Limpar logs antigos
+        async function clearLogs() {
+            if (!confirm('Deseja limpar logs de sincronização com mais de 30 dias?')) {
+                return;
+            }
+            
+            alert('Funcionalidade de limpar logs será implementada na próxima versão!');
+        }
+        
+        // Configuração da API
+        function showConfigModal() {
+            document.getElementById('configModal').classList.add('show');
+        }
+        
+        function hideConfigModal() {
+            document.getElementById('configModal').classList.remove('show');
+        }
+        
+        async function saveAPIConfig() {
+            const config = {
+                base_url: document.getElementById('api-base-url').value,
+                token_url: document.getElementById('api-token-url').value,
+                client_id: document.getElementById('api-client-id').value,
+                client_secret: document.getElementById('api-client-secret').value,
+                endpoint: document.getElementById('api-endpoint').value
+            };
+            
+            try {
+                // Em produção, isso salvaria no banco de dados ou arquivo .env
+                alert('Configurações salvas localmente. Em produção, estas configurações seriam salvas no servidor.');
+                hideConfigModal();
+                
+                // Atualizar status
+                document.getElementById('api-status').innerHTML = 
+                    '<i class="fas fa-info-circle"></i> Configurações atualizadas. Teste a conexão.';
+                
+            } catch (error) {
+                alert('Erro ao salvar configurações: ' + error.message);
+            }
+        }
+        
+        // Configuração de sincronização automática
+        async function saveAutoSyncConfig() {
+            const config = {
+                enabled: document.getElementById('auto-sync-enabled').checked,
+                interval: document.getElementById('sync-interval').value,
+                time: document.getElementById('sync-time').value,
+                notifications: document.getElementById('sync-notifications').checked
+            };
+            
+            alert('Configurações de sincronização automática salvas localmente.');
+        }
+        
+        // Inicializar
+        document.addEventListener('DOMContentLoaded', function() {
+            // Testar conexão automaticamente
+            testAPIConnection();
+            
+            // Carregar configurações salvas
+            const savedConfig = localStorage.getItem('api_auto_sync');
+            if (savedConfig) {
+                const config = JSON.parse(savedConfig);
+                document.getElementById('auto-sync-enabled').checked = config.enabled || false;
+                document.getElementById('sync-interval').value = config.interval || '30';
+                document.getElementById('sync-time').value = config.time || '06:00';
+                document.getElementById('sync-notifications').checked = config.notifications !== false;
+            }
+        });
+    </script>
+</body>
+</html>

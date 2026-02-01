@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Inicial</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i></a>
+            <div class="logo">
+                <i class="fas fa-tools"></i>
+                <h1>CONFIGURAÇÃO INICIAL</h1>
+            </div>
+            <p class="subtitle">Configure rapidamente o sistema para uso</p>
+        </div>
+        
+        <div class="setup-steps">
+            <div class="step active">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-users"></i> Verificar Usuários</h3>
+                    <p>Confira se todos os usuários padrão estão criados:</p>
+                    <ul class="user-list">
+                        <li><strong>OPERADOR001</strong> - João Silva (Operador)</li>
+                        <li><strong>OPERADOR002</strong> - Maria Santos (Operador)</li>
+                        <li><strong>SUPERVISOR001</strong> - Carlos Oliveira (Supervisor)</li>
+                        <li><strong>ADMIN001</strong> - Admin Sistema (Administrador)</li>
+                    </ul>
+                    <a href="/admin/usuarios" class="btn btn-primary">
+                        <i class="fas fa-user-cog"></i> Gerenciar Usuários
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-industry"></i> Verificar Máquinas</h3>
+                    <p>Confira se as máquinas padrão estão cadastradas:</p>
+                    <ul class="machine-list">
+                        <li><strong>JIGGER01</strong> - Jigger 1 (Tingimento)</li>
+                        <li><strong>JIGGER02</strong> - Jigger 2 (Tingimento)</li>
+                        <li><strong>TURBO01</strong> - Turbo 1 (Tingimento)</li>
+                        <li><strong>STORK01</strong> - Stork 1 (Estampagem)</li>
+                    </ul>
+                    <a href="/admin/maquinas" class="btn btn-primary">
+                        <i class="fas fa-cogs"></i> Gerenciar Máquinas
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-box"></i> Verificar OPs</h3>
+                    <p>Confira se as ordens de produção padrão estão cadastradas:</p>
+                    <ul class="op-list">
+                        <li><strong>OP 193</strong> - 3000m carregados (1500m produzidos)</li>
+                        <li><strong>OP 222</strong> - 2500m carregados (0m produzidos)</li>
+                        <li><strong>OP 245</strong> - 3800m carregados (3800m produzidos)</li>
+                    </ul>
+                    <a href="/admin/ops" class="btn btn-primary">
+                        <i class="fas fa-boxes"></i> Gerenciar OPs
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">4</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-exclamation-triangle"></i> Verificar Motivos de Parada</h3>
+                    <p>Confira se os motivos de parada padrão estão cadastrados:</p>
+                    <div class="motivos-grid-small">
+                        <span class="motivo-tag vermelho">Falta de energia</span>
+                        <span class="motivo-tag vermelho">Falta de gás</span>
+                        <span class="motivo-tag laranja">Manutenção corretiva</span>
+                        <span class="motivo-tag amarelo">Manutenção preventiva</span>
+                        <span class="motivo-tag azul">Aguardando qualidade</span>
+                        <span class="motivo-tag roxo">Falta de matéria-prima</span>
+                        <span class="motivo-tag cinza">Outros</span>
+                    </div>
+                    <a href="/admin/motivos_parada" class="btn btn-primary">
+                        <i class="fas fa-list-alt"></i> Gerenciar Motivos
+                    </a>
+                </div>
+            </div>
+            
+            <div class="step">
+                <div class="step-number">5</div>
+                <div class="step-content">
+                    <h3><i class="fas fa-play-circle"></i> Testar o Sistema</h3>
+                    <p>Execute um teste completo do fluxo de apontamento:</p>
+                    <ol class="test-steps">
+                        <li>Faça login como operador (OPERADOR001)</li>
+                        <li>Escaneie uma máquina (JIGGER01)</li>
+                        <li>Selecione uma OP (OP 193)</li>
+                        <li>Registre uma produção</li>
+                        <li>Teste o registro de parada</li>
+                    </ol>
+                    <a href="/scanner" class="btn btn-success">
+                        <i class="fas fa-play"></i> Iniciar Teste
+                    </a>
+                </div>
+            </div>
+        </div>
+        
+        <div class="quick-access">
+            <h3><i class="fas fa-bolt"></i> Acesso Rápido</h3>
+            <div class="quick-buttons">
+                <a href="/admin/dashboard" class="btn btn-primary">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard Admin
+                </a>
+                <a href="/scanner" class="btn btn-secondary">
+                    <i class="fas fa-qrcode"></i> Testar Scanner
+                </a>
+                <a href="/admin/usuarios?action=print_all" class="btn btn-outline">
+                    <i class="fas fa-print"></i> Imprimir Todos QR Codes
+                </a>
+            </div>
+        </div>
+        
+        <div class="system-info">
+            <h3><i class="fas fa-info-circle"></i> Informações do Sistema</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h4>Banco de Dados</h4>
+                        <p>SQLite - Dados armazenados localmente</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-qrcode"></i>
+                    <div>
+                        <h4>Sistema de QR Codes</h4>
+                        <p>Leitura via câmera ou digitação manual</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-mobile-alt"></i>
+                    <div>
+                        <h4>Interface Mobile</h4>
+                        <p>Otimizado para uso em celulares</p>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <i class="fas fa-chart-line"></i>
+                    <div>
+                        <h4>Relatórios</h4>
+                        <p>KPIs e estatísticas em tempo real</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Ativar passos conforme scroll
+        const steps = document.querySelectorAll('.step');
+        
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                }
+            });
+        }, { threshold: 0.5 });
+        
+        steps.forEach(step => observer.observe(step));
+    </script>
+</body>
+</html>

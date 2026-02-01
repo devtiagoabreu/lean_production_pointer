@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lean Production Pointer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">
+                <i class="fas fa-industry"></i>
+                <h1>LEAN PRODUCTION POINTER</h1>
+            </div>
+            <p class="subtitle">Sistema de Apontamento de Produção Têxtil</p>
+        </div>
+        
+        <div class="main-content">
+            <div class="welcome-card">
+                <h2><i class="fas fa-hand-wave"></i> Bem-vindo ao Sistema</h2>
+                <p>Escaneie seu crachá para iniciar o apontamento de produção</p>
+                
+                <div class="qr-example">
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-id-card"></i></div>
+                        <p>1. Escaneie o QR Code do seu crachá</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-cogs"></i></div>
+                        <p>2. Escaneie o QR Code da máquina</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-box"></i></div>
+                        <p>3. Selecione a OP (Ordem de Produção)</p>
+                    </div>
+                    <div class="qr-item">
+                        <div class="qr-icon"><i class="fas fa-check-circle"></i></div>
+                        <p>4. Registre a produção realizada</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="action-buttons">
+                <a href="/scanner" class="btn btn-primary btn-large">
+                    <i class="fas fa-qrcode"></i> INICIAR APONTAMENTO
+                </a>
+                
+                <div class="secondary-actions">
+                    <a href="/admin/dashboard" class="btn btn-secondary">
+                        <i class="fas fa-chart-line"></i> PAINEL ADMIN
+                    </a>
+                    
+                    <a href="/admin/setup" class="btn btn-outline">
+                        <i class="fas fa-cog"></i> CONFIGURAÇÃO
+                    </a>
+                </div>
+            </div>
+            
+            <div class="system-info">
+                <div class="info-card">
+                    <i class="fas fa-database"></i>
+                    <div>
+                        <h3>Sistema Online</h3>
+                        <p>Banco de dados conectado</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-mobile-alt"></i>
+                    <div>
+                        <h3>Mobile First</h3>
+                        <p>Otimizado para celulares</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <i class="fas fa-bolt"></i>
+                    <div>
+                        <h3>Tempo Real</h3>
+                        <p>Atualização instantânea</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
