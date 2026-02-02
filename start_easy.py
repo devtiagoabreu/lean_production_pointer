@@ -1,3 +1,5 @@
+# start_easy.py
+
 #!/usr/bin/env python3
 """
 🚀 INICIAR TUDO AUTOMATICAMENTE - Versão Simplificada
